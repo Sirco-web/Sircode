@@ -4,6 +4,8 @@ import chalk from 'chalk'
 import * as readline from 'readline'
 import { exec } from 'child_process'
 import { promisify } from 'util'
+import { existsSync } from 'fs'
+import { dirname, resolve } from 'path'
 import { Ollama } from './services/ollama.js'
 import { ContextService } from './services/context.js'
 import { run as runTool } from './tools/index.js'
@@ -45,33 +47,28 @@ p.command('chat [model]')
         if (!inp.trim()) { ask(); return }
 
         c.add('user', inp)
-        process.stdout.write(chalk.dim('thinking. '))
-        let dots = 0
-        const dots_int = setInterval(() => {
-          process.stdout.write(chalk.dim('.'))
-          dots++
-          if (dots > 10) {
-            process.stdout.write('\r' + chalk.dim('thinking' + '.'.repeat((dots % 4) + 1) + ' '.repeat(4 - ((dots % 4) + 1))) + '\r')
-          }
-        }, 300)
-
+        console.log(chalk.dim('streaming...\n'))
+        
         try {
-          const res = await o.chat(c.forAPI())
-          clearInterval(dots_int)
-          console.log('\r' + ' '.repeat(50) + '\r')
+          let res = ''
+          for await (const chunk of o.streamChat(c.forAPI())) {
+            process.stdout.write(chalk.green(chunk))
+            res += chunk
+          }
+          console.log('\n')
           
           c.add('assistant', res)
-          console.log(fmt.ai(fmt.trunc(res, 2000)))
-
-          parse(res).forEach(({ tool, args }) => {
-            const r = runTool(tool, ...args)
-            console.log(fmt.res(tool, r))
-          })
-          console.log()
+          
+          const toolCalls = parse(res)
+          if (toolCalls.length > 0) {
+            toolCalls.forEach(({ tool, args }) => {
+              const r = runTool(tool, ...args)
+              console.log(fmt.res(tool, r))
+            })
+            console.log()
+          }
         } catch (e) {
-          clearInterval(dots_int)
-          console.log('\r' + ' '.repeat(50) + '\r')
-          console.error(chalk.red(`✗ ${e instanceof Error ? e.message : String(e)}`))
+          console.error(chalk.red(`\n✗ ${e instanceof Error ? e.message : String(e)}`))
         }
 
         ask()
@@ -120,7 +117,24 @@ p.command('help').action(() => {
 
 p.command('update').action(async () => {
   try {
-    const sirDir = process.env.SIRCODE_INSTALL_DIR || `${process.env.HOME}/.local/share/sircode`
+    // Determine Sircode directory
+    let sirDir = process.env.SIRCODE_INSTALL_DIR || `${process.env.HOME}/.local/share/sircode`
+    
+    // If default location doesn't exist, try to use the location of this script
+    if (!existsSync(`${sirDir}/.git`)) {
+      const scriptDir = dirname(process.argv[1])
+      const repoDir = resolve(scriptDir, '..')
+      if (existsSync(`${repoDir}/.git`)) {
+        sirDir = repoDir
+      }
+    }
+    
+    if (!existsSync(`${sirDir}/.git`)) {
+      console.error(chalk.red('✗ Sircode repo not found'))
+      console.error(chalk.yellow('Please run: curl -sSL https://raw.githubusercontent.com/Sirco-web/Sircode/main/install.sh | bash'))
+      process.exit(1)
+    }
+    
     console.log(chalk.cyan(`📦 Updating from ${sirDir}...`))
     
     const { stdout: before } = await ex(`cd ${sirDir} && git rev-parse --short HEAD`)

@@ -24,7 +24,7 @@ export class Ollama {
 
   async chat(msgs: Msg[], opts?: Opts): Promise<string> {
     const ctrl = new AbortController()
-    const timeout = setTimeout(() => ctrl.abort(), 120000) // 2 min timeout
+    const timeout = setTimeout(() => ctrl.abort(), 600000) // 10 min timeout for CPU models
     
     try {
       const r = await fetch(`${this.url}/api/chat`, {
@@ -34,7 +34,7 @@ export class Ollama {
           model: this.model,
           messages: msgs,
           stream: false,
-          keep_alive: '5m',
+          keep_alive: '10m',
         }),
         signal: ctrl.signal,
       })
@@ -47,7 +47,56 @@ export class Ollama {
     } catch (e) {
       clearTimeout(timeout)
       if (e instanceof Error && e.name === 'AbortError') {
-        throw new Error('Request timeout - model took too long to respond')
+        throw new Error('Request timeout (10min)')
+      }
+      throw e
+    }
+  }
+
+  async *streamChat(msgs: Msg[], opts?: Opts): AsyncGenerator<string> {
+    const ctrl = new AbortController()
+    const timeout = setTimeout(() => ctrl.abort(), 600000) // 10 min timeout
+    
+    try {
+      const r = await fetch(`${this.url}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: this.model,
+          messages: msgs,
+          stream: true,
+          keep_alive: '10m',
+        }),
+        signal: ctrl.signal,
+      })
+      clearTimeout(timeout)
+      
+      if (!r.ok) throw new Error(`Ollama: ${r.status}`)
+      const reader = r.body?.getReader()
+      if (!reader) return
+      
+      const dec = new TextDecoder()
+      let buf = ''
+      
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        
+        buf += dec.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        
+        for (let i = 0; i < lines.length - 1; i++) {
+          try {
+            const d = JSON.parse(lines[i]!) as OllamaRes
+            if (d.message?.content) yield d.message.content
+          } catch {}
+        }
+        buf = lines[lines.length - 1]!
+      }
+    } catch (e) {
+      clearTimeout(timeout)
+      if (e instanceof Error && e.name === 'AbortError') {
+        throw new Error('Stream timeout (10min)')
       }
       throw e
     }
