@@ -71,13 +71,13 @@ p.command('chat [model]')
           
           const toolCalls = parse(res)
           if (toolCalls.length > 0) {
-            toolCalls.forEach(({ tool, args }) => {
-              const r = runTool(tool, ...args)
+            for (const { tool, args } of toolCalls) {
+              const r = await Promise.resolve(runTool(tool, ...args))
               console.log(fmt.res(tool, r))
               coord.recordTool(tool, r)
-              if (tool === 'wf') coord.recordFileOp('create', args[0])
+              if (tool === 'wf' || tool === 'fe') coord.recordFileOp('create', args[0])
               if (tool === 'rep' || tool === 'add') coord.recordFileOp('modify', args[0])
-            })
+            }
             console.log()
           }
         } catch (e) {

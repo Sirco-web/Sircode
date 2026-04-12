@@ -5,13 +5,14 @@ Sircode is an **Ollama-powered CLI coding assistant** inspired by the open-sourc
 ## Features
 
 ✨ **Interactive Chat Mode** - Have conversations with a local LLM about code and development  
-🛠️ **Built-in Tools** - Execute bash commands, read/write files, list directories  
+🛠️ **18+ Built-in Tools** - Execute bash, edit files, read with line numbers, search web, manage tasks  
 🔒 **Privacy-First** - All data stays on your machine (uses local Ollama)  
 ⚡ **Fast & Lightweight** - Written in TypeScript, runs on Node.js/Bun  
 📦 **Modular Architecture** - Easy to extend with new tools and services  
 🎯 **Multiple Models** - Use any Ollama-compatible model (Mistral, Neural Chat, etc.)
 💾 **Persistent Memory** - Saves session context to `.code/` directory
 📊 **Session Tracking** - Records files created, tools used, errors, and insights
+🌐 **Web Capabilities** - Fetch URLs and search the internet locally
 
 ## Prerequisites
 
