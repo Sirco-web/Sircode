@@ -97,6 +97,9 @@ sircode models
 
 # Single query
 sircode exec "What is TypeScript?"
+
+# Update Sircode to latest version
+sircode update
 ```
 
 **Or use locally** (without global install):

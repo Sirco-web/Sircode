@@ -2,10 +2,14 @@
 import { Command } from 'commander'
 import chalk from 'chalk'
 import * as readline from 'readline'
+import { exec } from 'child_process'
+import { promisify } from 'util'
 import { Ollama } from './services/ollama.js'
 import { ContextService } from './services/context.js'
 import { run as runTool } from './tools/index.js'
 import { fmt, parse } from './utils/index.js'
+
+const ex = promisify(exec)
 
 const p = new Command()
   .name('sircode')
@@ -41,12 +45,23 @@ p.command('chat [model]')
         if (!inp.trim()) { ask(); return }
 
         c.add('user', inp)
-        console.log(chalk.dim('...'))
+        process.stdout.write(chalk.dim('thinking. '))
+        let dots = 0
+        const dots_int = setInterval(() => {
+          process.stdout.write(chalk.dim('.'))
+          dots++
+          if (dots > 10) {
+            process.stdout.write('\r' + chalk.dim('thinking' + '.'.repeat((dots % 4) + 1) + ' '.repeat(4 - ((dots % 4) + 1))) + '\r')
+          }
+        }, 300)
 
         try {
           const res = await o.chat(c.forAPI())
+          clearInterval(dots_int)
+          console.log('\r' + ' '.repeat(50) + '\r')
+          
           c.add('assistant', res)
-          console.log('\n' + fmt.ai(fmt.trunc(res, 1500)))
+          console.log(fmt.ai(fmt.trunc(res, 2000)))
 
           parse(res).forEach(({ tool, args }) => {
             const r = runTool(tool, ...args)
@@ -54,6 +69,8 @@ p.command('chat [model]')
           })
           console.log()
         } catch (e) {
+          clearInterval(dots_int)
+          console.log('\r' + ' '.repeat(50) + '\r')
           console.error(chalk.red(`✗ ${e instanceof Error ? e.message : String(e)}`))
         }
 
@@ -98,6 +115,32 @@ p.command('help').action(() => {
   console.log('  chat [model]    Interactive chat')
   console.log('  models          List models')
   console.log('  exec <query>    Single query')
+  console.log('  update          Update Sircode via git')
+})
+
+p.command('update').action(async () => {
+  try {
+    const sirDir = process.env.SIRCODE_INSTALL_DIR || `${process.env.HOME}/.local/share/sircode`
+    console.log(chalk.cyan(`📦 Updating from ${sirDir}...`))
+    
+    const { stdout: before } = await ex(`cd ${sirDir} && git rev-parse --short HEAD`)
+    await ex(`cd ${sirDir} && git pull origin main`)
+    const { stdout: after } = await ex(`cd ${sirDir} && git rev-parse --short HEAD`)
+    
+    if (before.trim() === after.trim()) {
+      console.log(chalk.yellow('✓ Already up to date'))
+      return
+    }
+    
+    console.log(chalk.cyan(`🔨 Building...`))
+    await ex(`cd ${sirDir} && npm run build`)
+    
+    console.log(chalk.green('✅ Sircode updated!'))
+    console.log(chalk.dim(`${before.trim()} → ${after.trim()}`))
+  } catch (e) {
+    console.error(chalk.red(`✗ Update failed: ${e instanceof Error ? e.message : String(e)}`))
+    process.exit(1)
+  }
 })
 
 p.parse(process.argv)

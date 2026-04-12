@@ -23,18 +23,34 @@ export class Ollama {
   }
 
   async chat(msgs: Msg[], opts?: Opts): Promise<string> {
-    const r = await fetch(`${this.url}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: this.model,
-        messages: msgs,
-        stream: false,
-        options: { temp: opts?.temp ?? 0.7, top_k: opts?.top_k ?? 40, top_p: opts?.top_p ?? 0.9 },
-      }),
-    })
-    if (!r.ok) throw new Error(`Ollama: ${r.status}`)
-    return ((await r.json()) as OllamaRes).message.content
+    const ctrl = new AbortController()
+    const timeout = setTimeout(() => ctrl.abort(), 120000) // 2 min timeout
+    
+    try {
+      const r = await fetch(`${this.url}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: this.model,
+          messages: msgs,
+          stream: false,
+          keep_alive: '5m',
+        }),
+        signal: ctrl.signal,
+      })
+      clearTimeout(timeout)
+      
+      if (!r.ok) throw new Error(`Ollama: ${r.status}`)
+      const data = (await r.json()) as OllamaRes
+      if (!data.message?.content) throw new Error('No response from model')
+      return data.message.content
+    } catch (e) {
+      clearTimeout(timeout)
+      if (e instanceof Error && e.name === 'AbortError') {
+        throw new Error('Request timeout - model took too long to respond')
+      }
+      throw e
+    }
   }
 
   async *stream(msgs: Msg[], opts?: Opts): AsyncGenerator<string> {
