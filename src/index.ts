@@ -1,0 +1,6 @@
+export { Ollama } from './services/ollama.js'
+export { Exec } from './services/executor.js'
+export { ContextService } from './services/context.js'
+export { run, TOOLS } from './tools/index.js'
+export type { Tool } from './tools/index.js'
+export type { Msg, Ctx, ToolRes, OllamaRes, Opts } from './types/index.js'
