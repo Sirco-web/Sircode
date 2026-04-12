@@ -8,6 +8,7 @@ import { existsSync } from 'fs'
 import { dirname, resolve } from 'path'
 import { Ollama } from './services/ollama.js'
 import { ContextService } from './services/context.js'
+import { SessionCoordinator } from './coordinator/session.js'
 import { run as runTool } from './tools/index.js'
 import { fmt, parse } from './utils/index.js'
 
@@ -26,6 +27,7 @@ p.command('chat [model]')
 
     const o = new Ollama(m, opts.url)
     const c = new ContextService(m)
+    const coord = new SessionCoordinator(process.cwd(), m)
 
     if (!await o.ok()) {
       console.error(chalk.red(`✗ Can't reach Ollama at ${opts.url}`))
@@ -35,17 +37,25 @@ p.command('chat [model]')
 
     console.log(chalk.green('✓ OK'))
     console.log(chalk.dim(`Tools: ${(await import('./tools/index.js')).ls().map(t => t.name).join(', ')}`))
+    console.log(chalk.dim(`Session: ${coord.session.id}`))
     console.log()
 
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+
+    rl.on('close', () => {
+      coord.close()
+      console.log(chalk.dim(`\nSession saved to .code/`))
+    })
 
     const ask = (): void => {
       rl.question(chalk.blue('You: '), async (inp: string) => {
         if (inp.toLowerCase() === 'exit') { console.log(chalk.cyan('bye')); rl.close(); return }
         if (inp.toLowerCase() === 'models') { console.log(chalk.cyan((await o.ls()).join(', '))); ask(); return }
         if (inp.toLowerCase() === 'clear') { c.clear(); console.log(chalk.yellow('cleared')); ask(); return }
+        if (inp.toLowerCase() === 'stats') { console.log(chalk.cyan(JSON.stringify(coord.getStats(), null, 2))); ask(); return }
         if (!inp.trim()) { ask(); return }
 
+        coord.recordMessage()
         c.add('user', inp)
         console.log(chalk.dim('streaming...\n'))
         
@@ -64,11 +74,15 @@ p.command('chat [model]')
             toolCalls.forEach(({ tool, args }) => {
               const r = runTool(tool, ...args)
               console.log(fmt.res(tool, r))
+              coord.recordTool(tool, r)
+              if (tool === 'wf') coord.recordFileOp('create', args[0])
+              if (tool === 'rep' || tool === 'add') coord.recordFileOp('modify', args[0])
             })
             console.log()
           }
         } catch (e) {
           console.error(chalk.red(`\n✗ ${e instanceof Error ? e.message : String(e)}`))
+          coord.session.errors++
         }
 
         ask()
@@ -112,7 +126,40 @@ p.command('help').action(() => {
   console.log('  chat [model]    Interactive chat')
   console.log('  models          List models')
   console.log('  exec <query>    Single query')
+  console.log('  context         Show .code context & memory')
   console.log('  update          Update Sircode via git')
+})
+
+p.command('context').action(async () => {
+  try {
+    const { MemoryManager } = await import('./memory/manager.js')
+    const mem = new MemoryManager(process.cwd())
+    const ctx = mem.loadContext()
+    const stats = mem.getStats()
+
+    console.log(fmt.hdr('Context (.code/)'))
+    console.log(chalk.cyan('📂 Session Context:'))
+    if (ctx) {
+      console.log(`  Model: ${ctx.model}`)
+      console.log(`  CWD: ${ctx.cwd}`)
+      console.log(`  Files created: ${ctx.files_created.length}`)
+      console.log(`  Files modified: ${ctx.files_modified.length}`)
+      console.log(`  Tools used: ${ctx.tools_used.join(', ')}`)
+    } else {
+      console.log('  (no context yet)')
+    }
+
+    console.log(chalk.cyan('\n📊 Memory Stats:'))
+    console.log(`  Total events: ${stats.total}`)
+    Object.entries(stats.by_type).forEach(([type, count]) => {
+      console.log(`    ${type}: ${count}`)
+    })
+
+    console.log(chalk.cyan('\n🛠 Tools Used:'))
+    Array.from(stats.tools).forEach(t => console.log(`    • ${t}`))
+  } catch (e) {
+    console.error(chalk.red(`✗ ${e instanceof Error ? e.message : String(e)}`))
+  }
 })
 
 p.command('update').action(async () => {

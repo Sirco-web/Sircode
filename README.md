@@ -10,6 +10,8 @@ Sircode is an **Ollama-powered CLI coding assistant** inspired by the open-sourc
 ⚡ **Fast & Lightweight** - Written in TypeScript, runs on Node.js/Bun  
 📦 **Modular Architecture** - Easy to extend with new tools and services  
 🎯 **Multiple Models** - Use any Ollama-compatible model (Mistral, Neural Chat, etc.)
+💾 **Persistent Memory** - Saves session context to `.code/` directory
+📊 **Session Tracking** - Records files created, tools used, errors, and insights
 
 ## Prerequisites
 
@@ -98,6 +100,9 @@ sircode models
 # Single query
 sircode exec "What is TypeScript?"
 
+# View session context & memory
+sircode context
+
 # Update Sircode to latest version
 sircode update
 ```
@@ -141,6 +146,34 @@ When chatting with the AI, it can use these tools:
 - **mkdir** - Create directories
 - **ls** - List directory contents
 - **git** - Git operations
+
+## Memory & Context
+
+Sircode saves persistent session context to a `.code/` directory in your project:
+
+```bash
+my-project/
+├── src/
+├── index.html          # Your files
+└── .code/              # ← Auto-created by Sircode
+    ├── context.json    # Session metadata
+    ├── memory.jsonl    # Event log
+    └── metadata.json   # Statistics
+```
+
+### View Your Session
+
+```bash
+sircode context
+```
+
+Shows:
+- Model used and files created/modified
+- Tools executed and their success/failure
+- Memory statistics for analysis
+- Cumulative usage stats
+
+For more details, see [MEMORY.md](MEMORY.md)
 
 ## Architecture
 
