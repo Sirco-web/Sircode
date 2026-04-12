@@ -4,7 +4,8 @@ import { fileEdit } from './fileEdit.js'
 import { fileRead } from './fileRead.js'
 import { webFetch } from './webFetch.js'
 import { webSearch } from './webSearch.js'
-import { taskCreate, taskList, taskUpdate } from './tasks.js'
+import { askUser } from './askUser.js'
+import { taskCreate, taskList, taskUpdate, taskComplete, taskReset } from './task.js'
 
 export interface Tool { name: string; desc: string; run(...args: string[]): ToolRes | Promise<ToolRes> }
 
@@ -42,6 +43,17 @@ export const TOOLS: Record<string, Tool> = {
   }},
   tu: { name: 'tu', desc: 'task update', run(...a) { 
     try { return { ok: true, out: JSON.stringify(taskUpdate(a[0], a[1] as any)), err: '', ms: 0 } }
+    catch (e) { return { ok: false, out: '', err: (e as Error).message, ms: 0 } }
+  }},
+  tc2: { name: 'tc2', desc: 'task complete', run(...a) { 
+    try { return { ok: true, out: JSON.stringify(taskComplete(a[0])), err: '', ms: 0 } }
+    catch (e) { return { ok: false, out: '', err: (e as Error).message, ms: 0 } }
+  }},
+  tr: { name: 'tr', desc: 'task reset', run() { 
+    return { ok: true, out: JSON.stringify(taskReset()), err: '', ms: 0 }
+  }},
+  ask: { name: 'ask', desc: 'ask user question', run(...a) { 
+    try { return { ok: true, out: JSON.stringify(askUser(a.join(' '))), err: '', ms: 0 } }
     catch (e) { return { ok: false, out: '', err: (e as Error).message, ms: 0 } }
   }},
 }

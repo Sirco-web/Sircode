@@ -136,8 +136,9 @@ sircode exec "Create index.ts"
 
 ## Tools Available
 
-When chatting with the AI, it can use these tools:
+When chatting with the AI, it can use **18+ tools** to accomplish tasks:
 
+### 🔧 Core Tools (9)
 - **bash** - Execute shell commands
 - **rf** (read_file) - Read file contents
 - **wf** (write_file) - Write/create files
@@ -147,6 +148,73 @@ When chatting with the AI, it can use these tools:
 - **mkdir** - Create directories
 - **ls** - List directory contents
 - **git** - Git operations
+
+### 📚 Advanced File Tools (2)
+- **fe** (file_edit) - Precise text replacement with multi-line support
+  - Format: `[fe: path, old_text, new_text, replace_all?]`
+  - Example: `[fe: app.ts, const api = 'old', const api = 'new']`
+- **fr** (file_read) - Read with line numbers and offset/limit
+  - Format: `[fr: path, offset?, limit?]`
+  - Example: `[fr: package.json, 5, 10]` (read lines 5-15)
+
+### 🌐 Web Tools (2)
+- **wf2** (web_fetch) - Fetch and extract content from URLs
+  - Format: `[wf2: url, prompt?]`
+  - Example: `[wf2: https://docs.example.com, Extract API endpoint examples]`
+- **ws** (web_search) - Search the web for information
+  - Format: `[ws: query, max_results?]`
+  - Example: `[ws: typescript performance tips, 5]`
+
+### ✅ Task Management (4)
+- **tc** (task_create) - Create a task to track work items
+  - Format: `[tc: subject, description?]`
+- **tl** (task_list) - List all current tasks
+- **tu** (task_update) - Update task status
+- **tc2** (task_complete) - Mark a task as done
+
+### ❓ User Interaction (1)
+- **ask** - Ask user a clarifying question
+  - Format: `[ask: your question here]`
+  - When used, the AI waits for your answer and continues with the task
+
+## ⚡ Smart AI Behavior
+
+Sircode's AI assistant is designed to **get things done**:
+
+✅ **Continues Until Complete** - The AI won't stop after one response. It keeps working until your request is fully accomplished.
+
+✅ **Asks for Clarification** - If the AI is unsure about your intent, it uses the `[ask: question]` tool to get your input, then continues.
+
+✅ **Tracks Progress** - Uses tasks (`[tc:`, `[tl:`, `[tu:]`) to break complex work into trackable steps.
+
+✅ **Reports Results** - Shows you exactly what each tool accomplished (files created, text replaced, web pages fetched, etc.)
+
+### Example Interaction
+
+```bash
+You: Create a simple REST API with Express
+
+AI: [tc: Set up Express project, Install express and create package.json]
+AI: [bash: npm init -y && npm install express]
+AI: ✓ Express installed
+
+AI: [tc: Create server file, Create app.js with basic server]
+AI: [wf: app.js, const express = require('express'); ...]
+AI: ✓ app.js created
+
+AI: [tc: Add sample route, Add GET /hello endpoint]
+AI: [fe: app.js, module.exports, app.get('/hello', ...); module.exports]
+AI: ✓ Route added
+
+AI: [ask: Should I add a specific route like /api/users?]
+You: Yes, add /api/users POST endpoint
+
+AI: [fe: app.js, app.listen, app.post('/api/users', ...); app.listen]
+AI: ✓ API route added
+
+You can now run: node app.js
+All tasks completed! 🎉
+```
 
 ## Memory & Context
 

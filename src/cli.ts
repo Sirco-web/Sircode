@@ -72,11 +72,51 @@ p.command('chat [model]')
           const toolCalls = parse(res)
           if (toolCalls.length > 0) {
             for (const { tool, args } of toolCalls) {
-              const r = await Promise.resolve(runTool(tool, ...args))
-              console.log(fmt.res(tool, r))
-              coord.recordTool(tool, r)
-              if (tool === 'wf' || tool === 'fe') coord.recordFileOp('create', args[0])
-              if (tool === 'rep' || tool === 'add') coord.recordFileOp('modify', args[0])
+              if (tool === 'ask') {
+                // Handle ask tool - prompt user and continue
+                const q = args.join(' ')
+                console.log(chalk.yellow(`\n❓ AI Question: ${q}`))
+                
+                // Get user answer synchronously within the async flow
+                const answer = await new Promise<string>(resolve => {
+                  rl.question(chalk.blue('You: '), (ans) => resolve(ans))
+                })
+                
+                console.log(chalk.dim('\n✓ Continuing with your answer...\n'))
+                c.add('user', answer)
+                
+                // Continue the conversation with the answer
+                try {
+                  let res2 = ''
+                  for await (const chunk of o.streamChat(c.forAPI())) {
+                    process.stdout.write(chalk.green(chunk))
+                    res2 += chunk
+                  }
+                  console.log('\n')
+                  c.add('assistant', res2)
+                  
+                  // Process tools from the continuation
+                  const toolCalls2 = parse(res2)
+                  for (const { tool: t2, args: a2 } of toolCalls2) {
+                    if (t2 === 'ask') continue // Avoid infinite asks
+                    const r2 = await Promise.resolve(runTool(t2, ...a2))
+                    console.log(fmt.res(t2, r2))
+                    coord.recordTool(t2, r2)
+                    if (t2 === 'wf' || t2 === 'fe') coord.recordFileOp('create', a2[0])
+                    if (t2 === 'rep' || t2 === 'add') coord.recordFileOp('modify', a2[0])
+                  }
+                } catch (e) {
+                  console.error(chalk.red(`\n✗ ${e instanceof Error ? e.message : String(e)}`))
+                  coord.session.errors++
+                }
+              } else {
+                // Handle all other tools normally
+                const r = await Promise.resolve(runTool(tool, ...args))
+                console.log(fmt.res(tool, r))
+                coord.recordTool(tool, r)
+                if (tool === 'wf' || tool === 'fe') coord.recordFileOp('create', args[0])
+                if (tool === 'rep' || tool === 'add') coord.recordFileOp('modify', args[0])
+              }
             }
             console.log()
           }
