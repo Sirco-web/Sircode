@@ -17,15 +17,18 @@ Sircode is an **Ollama-powered CLI coding assistant** inspired by the open-sourc
 ## Prerequisites
 
 1. **Node.js** (v18+) or **Bun** installed
-2. **Ollama** running locally:
+2. **Ollama** installed (Sircode will auto-start it if installed but not running):
    ```bash
    # Download from https://ollama.ai
-   ollama serve
+   # Once installed, you don't need to run `ollama serve` manually - Sircode handles it!
    ```
-3. **A model pulled** in Ollama:
+3. **A model pulled** in Ollama (required once):
    ```bash
    ollama pull mistral    # or any other model
    ```
+   Then you can use sircode from any terminal without additional setup.
+
+> **💡 Tip:** First time using Ollama? It'll take a few seconds to start up. Sircode waits patiently!
 
 ## Installation
 
@@ -77,12 +80,23 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ## Quick Start
 
-### 1. Start Ollama (in a separate terminal)
+### 1. Ollama (Auto-Starts!)
+
+No need to manually start Ollama! Sircode will automatically detect and start Ollama if it's installed but not running.
+
+**First time setup:**
+```bash
+ollama pull mistral    # Pull a model (required once)
+```
+
+**That's it!** Just use sircode - it handles the rest:
 
 ```bash
-ollama serve
-ollama pull mistral  # or another model
+sircode chat          # Ollama auto-starts if needed
+sircode chat neural-chat
 ```
+
+If Ollama isn't installed, install it from https://ollama.ai first.
 
 ### 2. Use Sircode (Python Wrapper)
 

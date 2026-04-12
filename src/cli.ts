@@ -11,6 +11,7 @@ import { ContextService } from './services/context.js'
 import { SessionCoordinator } from './coordinator/session.js'
 import { run as runTool } from './tools/index.js'
 import { fmt, parse } from './utils/index.js'
+import { ensureOllama } from './services/startup.js'
 
 const ex = promisify(exec)
 
@@ -29,9 +30,12 @@ p.command('chat [model]')
     const c = new ContextService(m)
     const coord = new SessionCoordinator(process.cwd(), m)
 
-    if (!await o.ok()) {
+    console.log(chalk.dim('Checking Ollama...'))
+    const ok = await ensureOllama(opts.url)
+    
+    if (!ok) {
       console.error(chalk.red(`✗ Can't reach Ollama at ${opts.url}`))
-      console.error(chalk.red('Run: ollama serve'))
+      console.error(chalk.red('Make sure Ollama is installed: https://ollama.ai'))
       process.exit(1)
     }
 
