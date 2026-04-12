@@ -26,15 +26,50 @@ Sircode is an **Ollama-powered CLI coding assistant** inspired by the open-sourc
 
 ## Installation
 
+### Option 1: Automated Installation (Recommended)
+
+**Linux/macOS:**
+```bash
+curl -sSL https://raw.githubusercontent.com/Sirco-web/Sircode/main/install.sh | bash
+```
+
+**Or with wget:**
+```bash
+wget -qO- https://raw.githubusercontent.com/Sirco-web/Sircode/main/install.sh | bash
+```
+
+The installer will:
+- ✓ Install Node.js and npm (if needed)
+- ✓ Install Ollama (if needed)
+- ✓ Clone and build Sircode
+- ✓ Show next steps
+
+Then run for global access:
+```bash
+cd ~/.local/share/sircode
+bash install-global.sh
+```
+
+Add to your shell profile:
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+### Option 2: Manual Installation
+
 ```bash
 # Clone the repository
 git clone https://github.com/Sirco-web/Sircode.git
 cd Sircode
 
-# Install dependencies
-npm install
-# or with Bun
-bun install
+# Run install script (installs Node.js, npm, Ollama if needed)
+bash install.sh
+
+# Make globally available
+bash install-global.sh
+
+# Add to PATH
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ## Quick Start
@@ -43,50 +78,66 @@ bun install
 
 ```bash
 ollama serve
+ollama pull mistral  # or another model
 ```
 
-### 2. Use Sircode
+### 2. Use Sircode (Python Wrapper)
+
+**From any directory** (after global installation):
 
 ```bash
-# Interactive chat (recommended)
-python code.py chat
+# Interactive chat
+sircode chat
 
-# With specific model
-python code.py chat neural-chat
+# With specific model  
+sircode chat neural-chat
 
 # List available models
-python code.py models
+sircode models
 
 # Single query
-python code.py exec "What is TypeScript?"
+sircode exec "What is TypeScript?"
 ```
 
-## Commands
+**Or use locally** (without global install):
 
-### Chat Mode
 ```bash
-python code.py chat [MODEL]
-
-Options:
-  -m, --model <model>  Specific model (default: mistral)
-  -u, --url <url>      Ollama API URL (default: http://localhost:11434)
+cd /workspaces/Sircode
+python code.py chat
+python code.py models
+python code.py exec "Your question"
 ```
 
-**In chat:**
-- Type to chat with the AI
-- `exit` - Quit
-- `clear` - Clear history
-- `models` - List available models
+## How It Works
 
-### List Models
+The Python wrapper (`code.py`) bridges between user-friendly Python CLI and the powerful TypeScript backend:
+
+1. **Captures your working directory** - When you run `sircode chat` from `~/my-project`, it remembers that location
+2. **Delegates to TypeScript** - Passes the command to the compiled Node.js CLI
+3. **Routes file operations** - All file creates/edits/reads happen in YOUR directory, not Sircode's
+4. **Manages configuration** - Stores model/URL preferences in `~/.sircode/config.json`
+
+**Example:**
 ```bash
-python code.py models [-u URL]
+cd ~/my-awesome-app
+sircode exec "Create index.ts"
+# → Creates ~/my-awesome-app/index.ts ✓
+# (NOT /path/to/Sircode/index.ts)
 ```
 
-### Execute Query
-```bash
-python code.py exec "Your question" [-m MODEL] [-u URL]
-```
+## Tools Available
+
+When chatting with the AI, it can use these tools:
+
+- **bash** - Execute shell commands
+- **rf** (read_file) - Read file contents
+- **wf** (write_file) - Write/create files
+- **add** - Append to files
+- **rep** (replace) - Find and replace in files
+- **rmf** - Remove files/directories
+- **mkdir** - Create directories
+- **ls** - List directory contents
+- **git** - Git operations
 
 ## Architecture
 
@@ -156,30 +207,49 @@ For more details on architecture and extending Sircode, see [CAVEMAN_REFACTOR.md
 
 ## Usage Examples
 
-### Example 1: Get Help with Code
+### Example 1: Chat with AI from Your Project
 
-```
-You: How do I create a TypeScript function that reads a JSON file?
+```bash
+cd ~/my-project
+sircode chat
 
-Sircode: Here's a simple example...
-```
-
-### Example 2: Execute Commands
-
-```
-You: What files are in the current directory?
-[The assistant might suggest: list_dir: .]
-
-Sircode: ✓ Tool: list_dir (45ms)
-Output: [lists directory contents]
+# In chat:
+You: Create a TypeScript function that validates email addresses
+Sircode: Here's a function... [generates code]
+You: Use it in an index.ts file
+Sircode: [creates ~/my-project/index.ts]
 ```
 
-### Example 3: File Operations
+### Example 2: Single Query
 
+```bash
+cd ~/nodejs-app
+sircode exec -m neural-chat "Create a package.json for Express.js"
+# → Creates ~/nodejs-app/package.json
+
+cd ~/python-app
+sircode exec "Write a FastAPI hello world server"
+# → Creates files in ~/python-app/
 ```
-You: Create a simple index.ts file with a hello world function
 
-Sircode: [Creates the file]
+### Example 3: Multiple Models
+
+```bash
+# Quick responses with a small model
+sircode chat mistral
+
+# Code generation with larger model
+sircode chat neural-chat
+
+# Check available models
+sircode models
+```
+
+### Example 4: Custom Ollama URL
+
+```bash
+# Local network Ollama on another machine
+sircode chat -u http://192.168.1.100:11434 mistral
 ```
 
 ## Supported Models
