@@ -12,6 +12,7 @@ import { SessionCoordinator } from './coordinator/session.js'
 import { run as runTool } from './tools/index.js'
 import { fmt, parse } from './utils/index.js'
 import { ensureOllama } from './services/startup.js'
+import { ToolStreamExecutor } from './services/toolStream.js'
 
 const ex = promisify(exec)
 
@@ -65,20 +66,18 @@ p.command('chat [model]')
         
         try {
           let res = ''
+          const executor = new ToolStreamExecutor(coord, fmt)
+          
           for await (const chunk of o.streamChat(c.forAPI())) {
             process.stdout.write(chalk.green(chunk))
             res += chunk
-          }
-          console.log('\n')
-          
-          c.add('assistant', res)
-          
-          const toolCalls = parse(res)
-          if (toolCalls.length > 0) {
-            for (const { tool, args } of toolCalls) {
-              if (tool === 'ask') {
+            
+            // Process tools as they arrive (streaming execution)
+            const toolsFound = executor.processChunk(chunk)
+            for (const toolCall of toolsFound) {
+              if (toolCall.tool === 'ask') {
                 // Handle ask tool - prompt user and continue
-                const q = args.join(' ')
+                const q = toolCall.args.join(' ')
                 console.log(chalk.yellow(`\n❓ AI Question: ${q}`))
                 
                 // Get user answer synchronously within the async flow
@@ -92,37 +91,45 @@ p.command('chat [model]')
                 // Continue the conversation with the answer
                 try {
                   let res2 = ''
-                  for await (const chunk of o.streamChat(c.forAPI())) {
-                    process.stdout.write(chalk.green(chunk))
-                    res2 += chunk
+                  for await (const chunk2 of o.streamChat(c.forAPI())) {
+                    process.stdout.write(chalk.green(chunk2))
+                    res2 += chunk2
+                    
+                    // Continue processing tools in continuation
+                    const toolsFound2 = executor.processChunk(chunk2)
+                    for (const tc2 of toolsFound2) {
+                      if (tc2.tool !== 'ask') {
+                        await executor.executeTool(tc2)
+                      }
+                    }
                   }
                   console.log('\n')
                   c.add('assistant', res2)
-                  
-                  // Process tools from the continuation
-                  const toolCalls2 = parse(res2)
-                  for (const { tool: t2, args: a2 } of toolCalls2) {
-                    if (t2 === 'ask') continue // Avoid infinite asks
-                    const r2 = await Promise.resolve(runTool(t2, ...a2))
-                    console.log(fmt.res(t2, r2))
-                    coord.recordTool(t2, r2)
-                    if (t2 === 'wf' || t2 === 'fe') coord.recordFileOp('create', a2[0])
-                    if (t2 === 'rep' || t2 === 'add') coord.recordFileOp('modify', a2[0])
-                  }
                 } catch (e) {
                   console.error(chalk.red(`\n✗ ${e instanceof Error ? e.message : String(e)}`))
                   coord.session.errors++
                 }
               } else {
-                // Handle all other tools normally
-                const r = await Promise.resolve(runTool(tool, ...args))
-                console.log(fmt.res(tool, r))
-                coord.recordTool(tool, r)
-                if (tool === 'wf' || tool === 'fe') coord.recordFileOp('create', args[0])
-                if (tool === 'rep' || tool === 'add') coord.recordFileOp('modify', args[0])
+                // Execute other tools immediately
+                await executor.executeTool(toolCall)
               }
             }
-            console.log()
+          }
+          console.log('\n')
+          
+          c.add('assistant', res)
+          
+          // Handle any remaining tools not yet processed
+          const remaining = executor.flush()
+          if (remaining.trim()) {
+            const remainingTools = parse(remaining)
+            for (const { tool, args } of remainingTools) {
+              const result = await Promise.resolve(runTool(tool, ...args))
+              console.log(fmt.res(tool, result))
+              coord.recordTool(tool, result)
+              if (tool === 'wf' || tool === 'fe') coord.recordFileOp('create', args[0])
+              if (tool === 'rep' || tool === 'add') coord.recordFileOp('modify', args[0])
+            }
           }
         } catch (e) {
           console.error(chalk.red(`\n✗ ${e instanceof Error ? e.message : String(e)}`))

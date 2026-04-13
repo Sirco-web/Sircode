@@ -6,6 +6,7 @@ import { webFetch } from './webFetch.js'
 import { webSearch } from './webSearch.js'
 import { askUser } from './askUser.js'
 import { taskCreate, taskList, taskUpdate, taskComplete, taskReset } from './task.js'
+import { knowledgeQuery } from './knowledge.js'
 
 export interface Tool { name: string; desc: string; run(...args: string[]): ToolRes | Promise<ToolRes> }
 
@@ -56,6 +57,7 @@ export const TOOLS: Record<string, Tool> = {
     try { return { ok: true, out: JSON.stringify(askUser(a.join(' '))), err: '', ms: 0 } }
     catch (e) { return { ok: false, out: '', err: (e as Error).message, ms: 0 } }
   }},
+  kn: { name: 'kn', desc: 'query knowledge base', run(...a) { return knowledgeQuery(...a) }},
 }
 
 export const ls = () => Object.values(TOOLS)
