@@ -1,4 +1,8 @@
 node_modules/
+.code/
+.code/*
+*/.code/
+/.code/
 dist/
 *.log
 npm-debug.log*
