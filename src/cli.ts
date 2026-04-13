@@ -4,7 +4,7 @@ import chalk from 'chalk'
 import * as readline from 'readline'
 import { exec } from 'child_process'
 import { promisify } from 'util'
-import { existsSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
 import { dirname, resolve } from 'path'
 import { Ollama } from './services/ollama.js'
 import { ContextService } from './services/context.js'
@@ -13,6 +13,9 @@ import { run as runTool } from './tools/index.js'
 import { fmt, parse } from './utils/index.js'
 import { ensureOllama } from './services/startup.js'
 import { ToolStreamExecutor } from './services/toolStream.js'
+import { FrustrationDetector } from './services/frustration.js'
+import { UncoverMode } from './services/undercover.js'
+import { MemorySystem } from './services/memory.js'
 
 const ex = promisify(exec)
 
@@ -30,6 +33,9 @@ p.command('chat [model]')
     const o = new Ollama(m, opts.url)
     const c = new ContextService(m)
     const coord = new SessionCoordinator(process.cwd(), m)
+    const frustration = new FrustrationDetector()
+    const undercover = new UncoverMode()
+    const memory = new MemorySystem()
 
     console.log(chalk.dim('Checking Ollama...'))
     const ok = await ensureOllama(opts.url)
@@ -59,6 +65,14 @@ p.command('chat [model]')
         if (inp.toLowerCase() === 'clear') { c.clear(); console.log(chalk.yellow('cleared')); ask(); return }
         if (inp.toLowerCase() === 'stats') { console.log(chalk.cyan(JSON.stringify(coord.getStats(), null, 2))); ask(); return }
         if (!inp.trim()) { ask(); return }
+
+        // 🔍 Frustration Detection
+        const frustAnalysis = frustration.analyze(inp)
+        if (frustAnalysis.isFrustrated) {
+          const severity = frustration.getSeverity(frustAnalysis)
+          console.log(chalk.yellow(`  ${frustration.formatForLog(frustAnalysis)}`))
+          coord.session.negativeCount = (coord.session.negativeCount || 0) + 1
+        }
 
         coord.recordMessage()
         c.add('user', inp)
@@ -153,6 +167,61 @@ p.command('models')
       ms.length ? ms.forEach(m => console.log(`  • ${m}`)) : console.log(chalk.yellow('  (none pulled)'))
     } catch (e) {
       console.error(chalk.red(`✗ ${e instanceof Error ? e.message : String(e)}`))
+    }
+  })
+
+p.command('secure <file>')
+  .description('Scan file for sensitive data (API keys, credentials, secrets)')
+  .action((file: string) => {
+    try {
+      if (!existsSync(file)) {
+        console.error(chalk.red(`✗ File not found: ${file}`))
+        return
+      }
+      
+      const content = readFileSync(file, 'utf8')
+      const undercover = new UncoverMode()
+      const report = undercover.getSecurityReport(content)
+      
+      console.log(fmt.hdr('Security Scan'))
+      console.log(`File: ${file}`)
+      console.log(`Status: ${report.isSafe ? chalk.green('✓ Safe') : chalk.red('⚠️ Issues Found')}`)
+      
+      if (report.issues > 0) {
+        console.log(`\nIssues: ${report.issues} potential secrets`)
+        console.log(`Categories: ${report.categories.join(', ')}`)
+        console.log(`\n${report.recommendation}`)
+        console.log('\nRedacted version would show:')
+        const redacted = undercover.sanitizeForCommit(content)
+        console.log(chalk.dim(redacted.slice(0, 200) + '...'))
+      } else {
+        console.log(chalk.green('\n✓ No sensitive data detected'))
+      }
+    } catch (e) {
+      console.error(chalk.red(`✗ ${e instanceof Error ? e.message : String(e)}`))
+    }
+  })
+
+p.command('memory <action> [query]')
+  .description('Manage session memory (topics, transcripts, MEMORY.md)')
+  .action((action: string, query: string | undefined) => {
+    const memory = new MemorySystem()
+    
+    if (action === 'list') {
+      const topics = memory.searchMemory('')
+      console.log(fmt.hdr('Memory Topics'))
+      topics.forEach(t => console.log(`  • ${t.topic}`))
+    } else if (action === 'search' && query) {
+      const results = memory.searchMemory(query)
+      console.log(fmt.hdr(`Memory Search: "${query}"`))
+      results.forEach(r => console.log(`  • ${r.topic}`))
+    } else if (action === 'stats') {
+      const stats = memory.getStats()
+      console.log(fmt.hdr('Memory Statistics'))
+      console.log(`Topics: ${stats.topicFiles}`)
+      console.log(`Transcripts: ${stats.transcripts}`)
+    } else {
+      console.log('Usage: sircode memory <list|search|stats> [query]')
     }
   })
 

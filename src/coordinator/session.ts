@@ -10,6 +10,7 @@ export interface Session {
   files_modified: string[]
   tools_used: Map<string, number>
   errors: number
+  negativeCount?: number
 }
 
 export class SessionCoordinator {
