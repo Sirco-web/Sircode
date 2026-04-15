@@ -101,10 +101,38 @@ echo "🔨 Building Sircode..."
 npm run build
 
 echo ""
+echo "✅ TypeScript build complete!"
+echo ""
+
+# Run global installation
+echo "🌍 Setting up global command..."
+SIRCODE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BIN_DIR="$HOME/.local/bin"
+mkdir -p "$BIN_DIR"
+
+echo "🔗 Creating sircode command in $BIN_DIR..."
+cat > "$BIN_DIR/sircode" << EOF
+#!/bin/bash
+exec node "$SIRCODE_DIR/dist/cli.js" "\$@"
+EOF
+chmod +x "$BIN_DIR/sircode"
+
+# Check if ~/.local/bin is in PATH
+if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
+  echo ""
+  echo "⚠️  Add to your shell profile (~/.bashrc, ~/.zshrc, ~/.bash_profile):"
+  echo "   export PATH=\"\$HOME/.local/bin:\$PATH\""
+  echo ""
+  echo "Then reload: source ~/.bashrc"
+fi
+
+echo ""
 echo "✅ Installation complete!"
 echo ""
-echo "📝 Next steps:"
-echo "   1. Start Ollama in a terminal:  ollama serve"
-echo "   2. Pull a model (optional):    ollama pull mistral"
-echo "   3. Run setup for global cmd:   bash ./install-global.sh"
+echo "📝 Quick start:"
+echo "   sircode chat                    # Interactive chat"
+echo "   sircode chat mistral            # Use specific model"
+echo "   sircode server                  # Start server (port 8093)"
+echo "   sircode agent                   # Autonomous agent mode"
+echo "   sircode models                  # List available models"
 echo ""
