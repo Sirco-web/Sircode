@@ -164,12 +164,24 @@ ${skillsInfo}
 - No user confirmation is needed for execution
 - Focus on efficiency and accuracy
 
+## CRITICAL: Tool Format Requirement ⚠️
+
+Tools MUST be written with BRACKET FORMAT: [tool: args]
+NOT in markdown code blocks - markdown blocks are IGNORED!
+
+✅ CORRECT: [wf: file.html, <!DOCTYPE html>...]
+❌ WRONG:  \`\`\`bash\\nwf: file.html, content\\n\`\`\`
+
+Bracket Format = Instant Execution ✓
+Markdown Code Blocks = Ignored, files NOT created ✗
+
 ## Instructions
 1. When given a task, analyze it thoroughly
 2. Break it down into concrete, executable steps
 3. Use appropriate tools from available skills
 4. Handle errors gracefully with skip-on-failure where appropriate
-5. Always provide clear reasoning for your plan`
+5. Always provide clear reasoning for your plan
+6. ALWAYS use [bracket] format for tools - never use markdown code blocks`
 
     return systemPrompt
   }

@@ -98,7 +98,23 @@ p.command('chat [model]')
           try {
             let res = ''
             for await (const chunk of o.streamChat([
-              { role: 'system', content: 'You are Sircode - an autonomous coding assistant.' },
+              { 
+                role: 'system', 
+                content: `You are Sircode - an autonomous coding assistant.
+
+CRITICAL: Tool Format Requirement ⚠️
+Tools MUST use BRACKET FORMAT: [tool: args]
+NOT markdown code blocks - those are IGNORED!
+
+✅ CORRECT: [wf: file.html, <!DOCTYPE html>...]
+❌ WRONG:  \`\`\`bash\\nwf: file.html, content\\n\`\`\`
+
+Bracket Format = Files Created ✓
+Markdown Code Blocks = Ignored ✗
+
+Available tools: wf (write), fe (edit), fr (read), bash (execute), ws (search), wf2 (fetch)
+Always use [tool: args] bracket format - never use markdown code blocks!`
+              },
               { role: 'user', content: inp },
             ])) {
               process.stdout.write(chalk.green(chunk))

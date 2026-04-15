@@ -376,13 +376,31 @@ You detect and respond to user frustration:
 
   private static generateToolUsageGuidePrompt(): string {
     return `
-Use tools strategically:
+⚠️ CRITICAL: Tool Format Requirement
 
-**When to use bash:** Execute code, run tests, verify
-**When to use read/fetch:** Get actual data, verify facts
-**When to use write/edit:** Create/modify files
-**When to use search:** Research, find solutions
-**When NOT to:** User hasn't asked, over-engineering, false precision
+Tools MUST be written with BRACKET FORMAT: [tool: args]
+NOT in markdown code blocks - markdown blocks are IGNORED!
+
+✅ CORRECT FORMAT:
+[wf: index.html, <!DOCTYPE html>
+<html>...</html>]
+
+❌ WRONG FORMAT (DON'T DO THIS):
+\`\`\`bash
+wf: index.html, content
+\`\`\`
+
+Bracket Format = Instant Execution ✓
+Markdown Code Blocks = Ignored and filed is NOT created ✗
+
+Tools available: wf (write), fe (edit), fr (read), bash (execute), ws (search), wf2 (fetch), tc/tl/tu/tc2 (tasks), git
+
+Use tools strategically:
+- **bash:** Execute code, run tests, verify
+- **fr/wf2:** Get actual data, verify facts
+- **wf/fe:** Create/modify files (ALWAYS use bracket format!)
+- **ws:** Research, find solutions
+- **When NOT to:** User hasn't asked, over-engineering, false precision
 
 Always consider: Is this tool necessary? Will it help? Is it safe?
 `
