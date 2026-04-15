@@ -7,7 +7,7 @@ export class ContextService {
 
   constructor(model = 'mistral') {
     this.compactor = new MemoryCompactor({
-      maxContextTokens: 4000,
+      maxContextTokens: 999999, // Unlimited token context
       keepRecentMessages: 5,
       compactionTrigger: 0.7,
       verbose: false,

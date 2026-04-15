@@ -23,7 +23,7 @@ export class SessionCoordinator {
   constructor(cwd = process.cwd(), model = 'mistral') {
     this.mem = new MemoryManager(cwd)
     this.compactor = new MemoryCompactor({
-      maxContextTokens: 4000,
+      maxContextTokens: 999999, // Unlimited token context
       keepRecentMessages: 5,
       compactionTrigger: 0.7,
       verbose: false,

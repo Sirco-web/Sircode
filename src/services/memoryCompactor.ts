@@ -38,7 +38,7 @@ export class MemoryCompactor {
 
   constructor(config: Partial<CompactionConfig> = {}) {
     this.config = {
-      maxContextTokens: 4000, // 70% of ~6K typical limit
+      maxContextTokens: 999999, // Unlimited token context
       keepRecentMessages: 5,
       memoryDir: path.join(process.cwd(), '.code'),
       compactionTrigger: 0.7,
