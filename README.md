@@ -11,10 +11,11 @@ Sircode is an **Ollama-powered CLI coding assistant** inspired by the open-sourc
 ⚡ **Fast & Lightweight** - Written in TypeScript, runs on Node.js/Bun  
 📦 **Modular Architecture** - Easy to extend with new tools and services  
 🎯 **Multiple Models** - Use any Ollama-compatible model (Mistral, Neural Chat, etc.)
-💾 **Persistent Memory** - Saves session context to `.code/` directory
+💾 **Persistent Memory** - Saves session context to `.code/` directory with auto-compaction  
 📊 **Session Tracking** - Records files created, tools used, errors, and insights
 🌐 **Web Capabilities** - Fetch URLs and search the internet locally
 🧠 **Pensieve Thinking** - Agent uses internal planning without showing intermediate thinking
+🚀 **Small Model Boost** - Use `--small-model-mode` to supercharge 1B-8B models with prompt rewriting & multi-response validation
 
 ## Prerequisites
 
@@ -201,6 +202,121 @@ The agent uses "Pensieve mode" for internal thinking:
 This makes interactions faster and more focused.
 
 For full details, see [AGENT.md](./AGENT.md).
+
+## � Distributed Architecture (Server Mode)
+Sircode supports **distributed inference**: run Ollama on a GPU-powered server, code on your laptop, all connected over local network.
+
+### How It Works
+
+```bash
+# On server machine (with GPU)
+sircode server
+# ✅ Sircode Server running on http://192.168.1.100:8093
+# 🧠 GPU: CUDA - Driver: 545.29, Compute: 8.9
+
+# On laptop (port auto-detected - no need to type it!)
+sircode chat mistral --server 192.168.1.100
+# 🌐 Connecting to server: http://192.168.1.100:8093
+# ✓ Connected
+# You: [chat here] → runs on remote GPU
+```
+
+### Features
+
+✅ **Auto-GPU Detection** - NVIDIA CUDA, AMD ROCm, Apple Metal, CPU fallback  
+✅ **Model Management** - Auto-pulls models on server if not available  
+✅ **Network Streaming** - Streaming responses over HTTP  
+✅ **Distributed** - Works across any local network  
+✅ **Cross-Platform** - Windows, macOS, Linux compatible  
+
+### Server Command
+
+```bash
+# Start server (listens on all network interfaces)
+sircode server
+
+# Custom port
+sircode server --port 5000
+
+# Verbose output
+sircode server -v
+```
+
+### Client Connection
+
+```bash
+# Connect to remote server
+sircode chat mistral --server 192.168.1.100:3000
+sircode chat mistral --server 192.168.1.100  # Default port 3000
+sircode chat mistral --server 192.168.1.100:5000
+
+# Works with small model mode too
+sircode chat phi --server 192.168.1.100:3000 --small-model-mode
+```
+
+### Server API
+
+The server exposes REST endpoints for advanced integrations:
+
+- `GET /health` - Health check + GPU info
+- `GET /info` - Server information  
+- `GET /models` - List available models
+- `POST /chat` - Chat completion (supports streaming)
+- `POST /models/pull` - Pull a new model (streaming progress)
+
+Example curl:
+```bash
+curl -X POST http://192.168.1.100:3000/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mistral",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "stream": false
+  }'
+```
+
+## 💾 Memory & Context System
+Sircode implements a **3-layer persistent memory system** inspired by Claude Code:
+
+### What It Does
+
+✅ **Saves everything** to `.code/` directory  
+✅ **Auto-compacts context** at 70% usage  
+✅ **Keeps important facts** (decisions, code, errors)  
+✅ **Selective loading** (only recent + relevant)  
+✅ **Perfect for small models** (1B-8B models work better with clean context)
+
+### 3-Layer Architecture
+
+```
+Working Memory (last 5 messages)
+        ↓
+Context File (.code/context.md - summarized state)
+        ↓
+Long-Term Memory (.code/memory.md - important facts)
+```
+
+### Auto-Compaction
+
+When context reaches 70% of token limit:
+- Summarizes old messages
+- Keeps last 5 messages exactly
+- Preserves decisions and code snippets
+- Automatically saves to `.code/`
+
+### Example: Small Model Mode
+
+```bash
+# With auto-compaction and selective context
+sircode chat phi --small-model-mode
+
+# Automatically compacts when needed:
+# Memory compacted (1x)
+# Memory compacted (2x)
+# ... keeps running cleanly
+```
+
+For complete documentation, see [MEMORY_SYSTEM.md](./MEMORY_SYSTEM.md).
 
 ## How It Works
 
@@ -597,6 +713,535 @@ For issues and questions:
 - Open an issue on GitHub
 - Check the troubleshooting section above
 - Review Ollama documentation
+
+---
+
+## 📚 Complete Command Reference
+
+### Chat Mode Commands
+
+```bash
+# Basic chat
+sircode chat
+sircode chat mistral
+sircode chat neural-chat
+
+# Flags
+sircode chat mistral --small-model-mode              # Enable prompt rewriting & multi-response validation
+sircode chat mistral --server 192.168.1.100         # Connect to remote server (port auto-detected)
+sircode chat mistral --server 192.168.1.100:5000   # Connect to remote server with custom port
+sircode chat mistral -u http://custom:11434         # Use custom Ollama URL
+sircode chat mistral -m neural-chat                 # Model option
+```
+
+### Agent Mode Commands
+
+```bash
+# Autonomous agent
+sircode agent
+sircode agent mistral
+sircode agent neural-chat
+
+# Flags: same as chat mode
+sircode agent mistral --small-model-mode
+sircode agent mistral --server 192.168.1.100
+```
+
+### Server Mode Commands
+
+```bash
+# Start server (listens on all network interfaces, port 8093)
+sircode server
+
+# Custom port
+sircode server --port 5000
+sircode server -p 5000
+
+# Verbose output (shows requests, GPU info, model pulls)
+sircode server -v
+sircode server --verbose
+
+# Custom host
+sircode server --host 127.0.0.1          # Localhost only
+sircode server --host 0.0.0.0 --port 8093
+```
+
+### Other Commands
+
+```bash
+# List available models
+sircode models
+
+# Single query/execution
+sircode exec "Create a TypeScript utility"
+sircode exec -m mistral "Your task here"
+
+# View session context & memory
+sircode context
+
+# Update to latest version
+sircode update
+
+# Show help
+sircode --help
+sircode chat --help
+sircode agent --help
+sircode server --help
+```
+
+### All Flags Summary
+
+| Flag | Short | Type | Used In | Description |
+|------|-------|------|---------|-------------|
+| `--small-model-mode` | - | boolean | chat, agent | Enable prompt rewriting & multi-response validation for small models |
+| `--server` | - | string | chat, agent | Remote server address (auto-adds port 8093 if not specified) |
+| `-u, --url` | - | string | chat, agent | Custom Ollama URL (default: http://localhost:11434) |
+| `-m, --model` | - | string | chat, agent, exec | Model name (default: mistral) |
+| `-p, --port` | - | number | server | Server port (default: 8093) |
+| `--host` | - | string | server | Server host (default: 0.0.0.0) |
+| `-v, --verbose` | - | boolean | server, chat | Show detailed output |
+| `--help` | - | boolean | all | Show help message |
+
+---
+
+## 🏗️ System Architecture
+
+### High-Level Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    User Interface (CLI)                     │
+│                     (src/cli.ts)                            │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │  chat [model]    │  agent [model]  │  server         │   │
+│  └──────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+                            │
+        ┌───────────────────┼───────────────────┐
+        │                   │                   │
+        ▼                   ▼                   ▼
+   ┌─────────────┐   ┌─────────────┐   ┌──────────────┐
+   │  Ollama     │   │  Exec       │   │  Server      │
+   │  Service    │   │  Service    │   │  (Express)   │
+   └─────────────┘   └─────────────┘   └──────────────┘
+        │
+        └──────────┬──────────┐
+                   │          │
+            ┌──────▼──┐  ┌───▼─────────────┐
+            │   Chat  │  │   Agent         │
+            │  Mode   │  │   Mode (new)    │
+            └─────────┘  └─┬───────────────┘
+                         │
+        ┌────────────────┼────────────────┐
+        │                │                │
+        ▼                ▼                ▼
+   ┌──────────┐   ┌──────────┐   ┌──────────────┐
+   │Pensieve  │   │Skill     │   │Agent         │
+   │(Thinking)│   │Registry  │   │Executor      │
+   └──────────┘   └──────────┘   └──────────────┘
+        │              │              │
+        ▼              ▼              ▼
+   ┌──────────────────────────────────────────┐
+   │          Tool Execution Engine           │
+   │          (src/tools/index.ts)            │
+   │  ┌────────────────────────────────────┐  │
+   │  │ bash|rf|fe|wf|git|ws|wf2|ask|tasks│  │
+   │  └────────────────────────────────────┘  │
+   └──────────────────────────────────────────┘
+```
+
+### Core Services
+
+**Ollama Service** - Handles all Ollama API communication
+- Chat completion (streaming & non-streaming)
+- Model listing and management
+- Connection verification
+- Timeout protection (10 minutes for large models)
+
+**Context Service** - Maintains conversation context
+- Adds and tracks messages
+- Formats for API calls
+- Auto-compaction at 70% tokens
+
+**Session Coordinator** - Tracks all operations
+- Records messages and tool calls
+- Saves to `.code/` directory
+- Tracks files created/modified
+- Logs insights and errors
+
+**Pensieve Service** (Agent Mode) - Internal thinking/planning
+- Analyzes requests in silence
+- Creates detailed execution plans
+- Validates plans before execution
+- Hides working from user
+
+**Skill Registry** - Manages agent capabilities
+- Code, Analysis, Knowledge, Execution, Creativity
+- Tool bindings and availability
+- Provides context to guide AI behavior
+
+**GPU Detector** - Auto-detects GPU setup
+- NVIDIA CUDA detection (any driver version)
+- AMD ROCm support
+- Apple Metal support
+- CPU fallback
+
+**Ollama Setup** (Auto-startup) - Manages Ollama lifecycle
+- Checks if Ollama is installed
+- Auto-downloads and installs (Linux/macOS)
+- Auto-starts if not running
+- Waits for readiness (30s timeout)
+
+---
+
+## 🤖 Agent Mode Deep Dive
+
+### Three Execution Phases
+
+**1. Pensieve (Silent Thinking)**
+- AI analyzes your request internally
+- Creates detailed execution plan
+- Validates that plan is viable
+- User doesn't see this phase
+
+**2. Plan Presentation**
+- Shows planned steps for transparency
+- Displays reasoning behind plan
+- User can review before execution starts
+- Automatic execution without confirmation
+
+**3. Auto-Execution**
+- Executes steps sequentially
+- Handles errors gracefully
+- Reports real-time progress
+- Generates completion report
+
+### Available Skills
+
+**Code Execution**
+- bash-execution: Run commands and scripts
+- file-editing: Create/modify files with precision
+- directory-management: Create and organize folders
+- git-integration: Version control operations
+
+**Knowledge & Research**
+- web-search: Search internet for information
+- web-fetch: Extract content from URLs
+- knowledge-base: Query persistent knowledge
+
+**Task & Project Management**
+- task-management: Create and track tasks
+- project-planning: Break down features into steps
+
+**Analysis & Creativity**
+- code-analysis: Review code for issues
+- creative-writing: Generate docs and comments
+- debugging: Find and fix bugs
+- problem-solving: Break down complex tasks
+
+**18+ total tools** available automatically!
+
+### Example Agent Sessions
+
+**Creating a Feature**
+```
+You: Create a React component for user profile card
+
+Agent Thinks...
+Plan: 1) Create component 2) Add styles 3) Write tests 4) Document
+
+Executing...
+✓ Component created
+✓ Tailwind styles added
+✓ Unit tests passed
+✓ JSDoc added
+
+4/4 steps successful in 3.2s
+```
+
+**Debugging an Issue**
+```
+You: Fix null reference error in login handler
+
+Agent Thinks...
+Plan: 1) Read function 2) Run tests 3) Add guards 4) Verify
+
+Executing...
+✓ Function read
+✓ Tests show 3 failures
+✓ Null checks added
+✓ All tests passing
+
+5/5 steps successful
+```
+
+---
+
+## 💾 Memory & Context System
+
+### 3-Layer Architecture
+
+```
+Working Memory (last 5 messages - never summarized)
+        ↓
+Context Layer (.code/context.md - summarized state)
+        ↓
+Long-Term Memory (.code/memory.md - key facts)
+```
+
+### Auto-Compaction Process
+
+When context reaches 70% of token limit:
+- Summarizes messages older than last 5
+- Preserves decisions and code examples
+- Extracts important facts
+- Saves to `.code/` directory
+- Continues with clean context
+
+### What Gets Saved
+
+| File | Contains | Updated | Purpose |
+|------|----------|---------|---------|
+| `.code/context.md` | Current state summary | Each compaction | Quick session overview |
+| `.code/memory.md` | Important facts & decisions | Each compaction | Long-term knowledge |
+| `.code/history.log` | Full raw chat | Each message | Complete audit trail |
+| `.code/tasks.md` | Current task list | When tasks change | Track progress |
+
+### Benefits for Small Models
+
+Without memory system:
+- Context bloats → 4000+ tokens
+- Model gets confused
+- More hallucinations
+- Slower responses
+
+With memory system:
+- Context stays lean → 500-600 tokens
+- Only relevant info included
+- Better reasoning and accuracy
+- Faster responses
+
+**Result:** 1B-8B models perform like much larger models!
+
+### Manual Commands
+
+```bash
+sircode context                 # View session data
+cat .code/history.log          # See full chat history
+cat .code/memory.md            # View long-term facts
+cat .code/context.md           # See current state
+rm -rf .code/                  # Clear memory (restart fresh)
+```
+
+---
+
+## 🌐 Distributed/Server Architecture
+
+### Perfect For
+
+- 💻 Laptop + Desktop setups
+- 🏠 Home networks
+- 🏢 Small office networks
+- 🔧 Shared GPU resources
+- 🔒 Privacy-first teams
+
+### GPU Auto-Detection
+
+**NVIDIA CUDA**
+- Works on Windows, macOS, Linux
+- Any NVIDIA GPU
+- Auto-detects driver version
+- Sets optimal performance flags
+
+**AMD ROCm**
+- Works on Linux
+- Any AMD GPU with ROCm
+- Enables Radeon acceleration
+
+**Apple Metal**
+- Works on macOS
+- All Apple Silicon Macs
+- Native GPU acceleration
+
+**CPU Fallback**
+- Works on any machine
+- Slower but always available
+- Auto-selected if no GPU found
+
+### Server Setup
+
+```bash
+# On GPU machine
+sircode server
+
+# Server auto-detects GPU and starts on port 8093
+# Listens on all network interfaces (0.0.0.0)
+```
+
+### Client Connection
+
+```bash
+# From any machine on the network
+sircode chat mistral --server 192.168.1.100
+
+# Auto-adds port 8093 if not specified
+# Or with custom port if needed
+sircode chat mistral --server 192.168.1.100:5000
+```
+
+### Model Auto-Pull
+
+When you request a model not on the server:
+- Server auto-downloads it
+- Pulls happen in background
+- User sees "Model ready" when complete
+- No manual setup needed
+
+### Server REST API
+
+- `GET /health` - Health check + GPU info
+- `GET /info` - Server details (OS, memory, GPU)
+- `GET /models` - List available models
+- `POST /chat` - Chat completion (supports streaming)
+- `POST /models/pull` - Pull a new model (streaming)
+
+Example:
+```bash
+curl -X POST http://192.168.1.100:8093/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mistral",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "stream": false
+  }'
+```
+
+---
+
+## 🧠 Small Model Optimization
+
+### What It Does
+
+`--small-model-mode` enables special handling for small models (1B-8B parameters):
+
+1. **Prompt Rewriting**
+   - Simplifies complex requests
+   - Provides more structure
+   - Breaks down multi-part queries
+
+2. **Task Classification**
+   - Identifies what kind of task it is
+   - Routes to appropriate strategy
+   - Pre-warms context
+
+3. **Multi-Response Voting**
+   - Generates 3 responses for critical tasks
+   - Validates each against criteria
+   - Returns highest-quality response
+
+4. **Response Validation**
+   - Checks for hallucinations
+   - Verifies code syntax
+   - Ensures relevance to question
+   - 8-point validation rubric
+
+5. **Selective Context Loading**
+   - Only loads relevant history
+   - Not full conversation
+   - Works with memory compaction
+   - Keeps tokens lean
+
+### Usage
+
+```bash
+# Small model with optimizations enabled
+sircode chat phi --small-model-mode
+
+# Works with server too
+sircode chat phi --server 192.168.1.100 --small-model-mode
+
+# Works with agent mode
+sircode agent mistral --small-model-mode
+```
+
+### Results
+
+- **phi-2** (2.7B) → performs like 13B model
+- **mistral-7B** → performs significantly better with less hallucination
+- **neural-chat-7B** → more accurate code generation
+- Works best with models 1B-8B range
+
+---
+
+## 🛠️ Tools & Capabilities
+
+### File Operation Tools
+
+**bash** - Execute shell commands
+```bash
+sircode exec "bash: npm install"
+```
+
+**rf (read_file)** - Read file contents
+```bash
+sircode exec "rf: src/app.ts, 1, 50"  # Lines 1-50
+```
+
+**wf (write_file)** - Write/create files
+```bash
+sircode exec "wf: index.ts, console.log('hello')"
+```
+
+**fe (file_edit)** - Precise multi-line editing
+```bash
+sircode exec "fe: app.ts, old_text, new_text"
+```
+
+**git** - Version control operations
+```bash
+sircode exec "git: add . && git commit -m 'Initial commit'"
+```
+
+### Web Tools
+
+**ws (web_search)** - Search the internet
+```bash
+sircode exec "ws: TypeScript best practices, 5"
+```
+
+**wf2 (web_fetch)** - Extract URL content
+```bash
+sircode exec "wf2: https://docs.example.com, Extract API examples"
+```
+
+### Task Management
+
+**tc (task_create)** - Create a task
+```
+[tc: Feature name, Description]
+```
+
+**tl (task_list)** - List all tasks
+```
+[tl:]
+```
+
+**tu (task_update)** - Update task status
+```
+[tu: task_id, status]
+```
+
+**tc2 (task_complete)** - Mark task done
+```
+[tc2: task_id]
+```
+
+### User Interaction
+
+**ask** - Ask user clarifying questions
+```
+[ask: Your question here?]
+```
 
 ---
 

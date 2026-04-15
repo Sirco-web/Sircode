@@ -17,20 +17,112 @@ import { FrustrationDetector } from './services/frustration.js'
 import { UncoverMode } from './services/undercover.js'
 import { MemorySystem } from './services/memory.js'
 import { Agent } from './services/agent.js'
+import { SmallModelCorrectorSystem } from './services/smallModelCorrector.js'
+import { SircodeServer } from './services/server.js'
+import { GPUDetector } from './services/gpuDetector.js'
 
 const ex = promisify(exec)
 
 const p = new Command()
   .name('sircode')
-  .description('Ollama CLI code assistant')
+  .description('Autonomous CLI coding assistant')
   .version('0.1.0')
 
 p.command('chat [model]')
   .option('-u, --url <url>', 'Ollama API URL', 'http://localhost:11434')
-  .action(async (model: string | undefined, opts: { url: string }) => {
+  .option('-s, --small-model-mode', 'Enable small model corrector (for 1B-8B models)')
+  .option('--server <address>', 'Use remote Sircode server (format: ip:port or ip)')
+  .action(async (model: string | undefined, opts: { url: string; smallModelMode?: boolean; server?: string }) => {
     const m = model || 'mistral'
     console.log(fmt.hdr(`Sircode: ${m}`))
 
+    // Handle remote server mode
+    if (opts.server) {
+      // Parse server address
+      let serverUrl = opts.server
+      if (!serverUrl.startsWith('http')) {
+        // Add default port if not specified
+        if (!serverUrl.includes(':')) {
+          serverUrl = `http://${serverUrl}:8093`
+        } else if (serverUrl.match(/:\d+$/) === null) {
+          serverUrl = `http://${serverUrl}:8093`
+        } else {
+          serverUrl = `http://${serverUrl}`
+        }
+      }
+
+      console.log(chalk.cyan(`🌐 Connecting to server: ${serverUrl}`))
+
+      // Use remote Ollama via server
+      const o = new Ollama(m, `${serverUrl}`)
+      const coord = new SessionCoordinator(process.cwd(), m)
+      const frustration = new FrustrationDetector()
+
+      // Test connection
+      if (!(await o.ok())) {
+        console.error(chalk.red(`✗ Can't reach Sircode server at ${serverUrl}`))
+        process.exit(1)
+      }
+
+      console.log(chalk.green('✓ Connected'))
+      console.log(chalk.dim(`Server: ${serverUrl}`))
+      console.log()
+
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+
+      rl.on('close', () => {
+        coord.close()
+        console.log(chalk.dim(`\nSession saved to .code/`))
+      })
+
+      const ask = (): void => {
+        rl.question(chalk.blue('You: '), async (inp: string) => {
+          if (inp.toLowerCase() === 'exit') {
+            console.log(chalk.cyan('bye'))
+            rl.close()
+            return
+          }
+          if (inp.toLowerCase() === 'models') {
+            console.log(chalk.cyan((await o.ls()).join(', ')))
+            ask()
+            return
+          }
+          if (!inp.trim()) {
+            ask()
+            return
+          }
+
+          coord.recordMessage()
+          console.log(chalk.dim('streaming...\n'))
+
+          try {
+            let res = ''
+            for await (const chunk of o.streamChat([
+              { role: 'system', content: 'You are Sircode - an autonomous coding assistant.' },
+              { role: 'user', content: inp },
+            ])) {
+              process.stdout.write(chalk.green(chunk))
+              res += chunk
+            }
+            console.log('\n')
+
+            if (res) {
+              coord.session.messages++
+            }
+          } catch (e) {
+            console.error(chalk.red(`\n✗ ${e instanceof Error ? e.message : String(e)}`))
+            coord.session.errors++
+          }
+
+          ask()
+        })
+      }
+
+      ask()
+      return
+    }
+
+    // Local mode (original logic)
     const o = new Ollama(m, opts.url)
     const c = new ContextService(m)
     const coord = new SessionCoordinator(process.cwd(), m)
@@ -59,6 +151,26 @@ p.command('chat [model]')
       console.log(chalk.dim(`\nSession saved to .code/`))
     })
 
+    // Initialize SmallModelCorrector if flag is set
+    const corrector = opts.smallModelMode
+      ? new SmallModelCorrectorSystem(o, {
+          maxIterations: 3,
+          temperature: 0.3,
+          useMultiResponse: true,
+          strictMode: true,
+          verbose: true,
+          useRAG: false,
+        })
+      : null
+    
+    if (opts.smallModelMode) {
+      console.log(chalk.yellow('✓ Small model mode enabled'))
+      console.log(chalk.dim('  • Task classification enabled'))
+      console.log(chalk.dim('  • Prompt rewriting enabled'))
+      console.log(chalk.dim('  • Multi-response validation enabled'))
+      console.log()
+    }
+
     const ask = (): void => {
       rl.question(chalk.blue('You: '), async (inp: string) => {
         if (inp.toLowerCase() === 'exit') { console.log(chalk.cyan('bye')); rl.close(); return }
@@ -77,75 +189,96 @@ p.command('chat [model]')
 
         coord.recordMessage()
         c.add('user', inp)
+        
+        // Check for auto-compaction
+        coord.recordContextSnapshot(c.get())
+        
         console.log(chalk.dim('streaming...\n'))
         
         try {
           let res = ''
-          const executor = new ToolStreamExecutor(coord, fmt)
           
-          for await (const chunk of o.streamChat(c.forAPI())) {
-            process.stdout.write(chalk.green(chunk))
-            res += chunk
+          // Use SmallModelCorrector if flag is set
+          if (corrector && opts.smallModelMode) {
+            console.log(chalk.dim('  [Small model corrector]'))
+            // Build selective context (only recent + important facts)
+            const selectiveCtx = await c.buildSelectiveContext()
+            const result = await corrector.process(inp, selectiveCtx)
+            res = result.final_response
+            console.log(chalk.green(res))
+            console.log('\n')
+          } else {
+            // Standard streaming chat
+            const executor = new ToolStreamExecutor(coord, fmt)
             
-            // Process tools as they arrive (streaming execution)
-            const toolsFound = executor.processChunk(chunk)
-            for (const toolCall of toolsFound) {
-              if (toolCall.tool === 'ask') {
-                // Handle ask tool - prompt user and continue
-                const q = toolCall.args.join(' ')
-                console.log(chalk.yellow(`\n❓ AI Question: ${q}`))
-                
-                // Get user answer synchronously within the async flow
-                const answer = await new Promise<string>(resolve => {
-                  rl.question(chalk.blue('You: '), (ans) => resolve(ans))
-                })
-                
-                console.log(chalk.dim('\n✓ Continuing with your answer...\n'))
-                c.add('user', answer)
-                
-                // Continue the conversation with the answer
-                try {
-                  let res2 = ''
-                  for await (const chunk2 of o.streamChat(c.forAPI())) {
-                    process.stdout.write(chalk.green(chunk2))
-                    res2 += chunk2
-                    
-                    // Continue processing tools in continuation
-                    const toolsFound2 = executor.processChunk(chunk2)
-                    for (const tc2 of toolsFound2) {
-                      if (tc2.tool !== 'ask') {
-                        await executor.executeTool(tc2)
+            for await (const chunk of o.streamChat(c.forAPI())) {
+              process.stdout.write(chalk.green(chunk))
+              res += chunk
+              
+              // Process tools as they arrive (streaming execution)
+              const toolsFound = executor.processChunk(chunk)
+              for (const toolCall of toolsFound) {
+                if (toolCall.tool === 'ask') {
+                  // Handle ask tool - prompt user and continue
+                  const q = toolCall.args.join(' ')
+                  console.log(chalk.yellow(`\n❓ AI Question: ${q}`))
+                  
+                  // Get user answer synchronously within the async flow
+                  const answer = await new Promise<string>(resolve => {
+                    rl.question(chalk.blue('You: '), (ans) => resolve(ans))
+                  })
+                  
+                  console.log(chalk.dim('\n✓ Continuing with your answer...\n'))
+                  c.add('user', answer)
+                  
+                  // Continue the conversation with the answer
+                  try {
+                    let res2 = ''
+                    for await (const chunk2 of o.streamChat(c.forAPI())) {
+                      process.stdout.write(chalk.green(chunk2))
+                      res2 += chunk2
+                      
+                      // Continue processing tools in continuation
+                      const toolsFound2 = executor.processChunk(chunk2)
+                      for (const tc2 of toolsFound2) {
+                        if (tc2.tool !== 'ask') {
+                          await executor.executeTool(tc2)
+                        }
                       }
                     }
+                    console.log('\n')
+                    c.add('assistant', res2)
+                  } catch (e) {
+                    console.error(chalk.red(`\n✗ ${e instanceof Error ? e.message : String(e)}`))
+                    coord.session.errors++
                   }
-                  console.log('\n')
-                  c.add('assistant', res2)
-                } catch (e) {
-                  console.error(chalk.red(`\n✗ ${e instanceof Error ? e.message : String(e)}`))
-                  coord.session.errors++
+                } else {
+                  // Execute other tools immediately
+                  await executor.executeTool(toolCall)
                 }
-              } else {
-                // Execute other tools immediately
-                await executor.executeTool(toolCall)
+              }
+            }
+            console.log('\n')
+            
+            // Handle any remaining tools not yet processed
+            const remaining = executor.flush()
+            if (remaining.trim()) {
+              const remainingTools = parse(remaining)
+              for (const { tool, args } of remainingTools) {
+                const result = await Promise.resolve(runTool(tool, ...args))
+                console.log(fmt.res(tool, result))
+                coord.recordTool(tool, result)
+                if (tool === 'wf' || tool === 'fe') coord.recordFileOp('create', args[0])
+                if (tool === 'rep' || tool === 'add') coord.recordFileOp('modify', args[0])
               }
             }
           }
-          console.log('\n')
           
           c.add('assistant', res)
           
-          // Handle any remaining tools not yet processed
-          const remaining = executor.flush()
-          if (remaining.trim()) {
-            const remainingTools = parse(remaining)
-            for (const { tool, args } of remainingTools) {
-              const result = await Promise.resolve(runTool(tool, ...args))
-              console.log(fmt.res(tool, result))
-              coord.recordTool(tool, result)
-              if (tool === 'wf' || tool === 'fe') coord.recordFileOp('create', args[0])
-              if (tool === 'rep' || tool === 'add') coord.recordFileOp('modify', args[0])
-            }
-          }
+          // Check for auto-compaction after response
+          coord.recordContextSnapshot(c.get())
+
         } catch (e) {
           console.error(chalk.red(`\n✗ ${e instanceof Error ? e.message : String(e)}`))
           coord.session.errors++
@@ -434,6 +567,52 @@ Or ask the agent to do anything! Example:
     }
 
     ask()
+  })
+
+p.command('server')
+  .option('-p, --port <port>', 'Server port', '8093')
+  .option('-h, --host <host>', 'Server host', '0.0.0.0')
+  .option('-v, --verbose', 'Verbose output')
+  .description('Start Sircode server for distributed inference')
+  .action(async (opts: { port: string; host: string; verbose: boolean }) => {
+    const port = parseInt(opts.port, 10)
+
+    console.log(fmt.hdr('Sircode Server'))
+    console.log(chalk.cyan(`🚀 Starting server on port ${port}...`))
+    console.log()
+
+    // Show GPU info
+    const gpu = GPUDetector.detect()
+    console.log(chalk.bold(`GPU Detection:`))
+    console.log(GPUDetector.format(gpu))
+    console.log()
+
+    try {
+      const server = new SircodeServer({
+        port,
+        host: opts.host,
+        verbose: opts.verbose,
+      })
+
+      await server.start()
+
+      // Handle shutdown gracefully
+      process.on('SIGINT', async () => {
+        console.log(chalk.yellow('\n⏹️  Shutting down...'))
+        await server.stop()
+        process.exit(0)
+      })
+
+      process.on('SIGTERM', async () => {
+        console.log(chalk.yellow('\n⏹️  Shutting down...'))
+        await server.stop()
+        process.exit(0)
+      })
+    } catch (e) {
+      console.error(chalk.red(`✗ Failed to start server:`))
+      console.error(chalk.red(e instanceof Error ? e.message : String(e)))
+      process.exit(1)
+    }
   })
 
 p.parse(process.argv)

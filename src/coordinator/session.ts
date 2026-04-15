@@ -1,4 +1,5 @@
 import { MemoryManager, CodeContext } from '../memory/manager.js'
+import { MemoryCompactor } from '../services/memoryCompactor.js'
 
 export interface Session {
   id: string
@@ -11,14 +12,22 @@ export interface Session {
   tools_used: Map<string, number>
   errors: number
   negativeCount?: number
+  compactions?: number
 }
 
 export class SessionCoordinator {
   mem: MemoryManager
   session: Session
+  compactor: MemoryCompactor
 
   constructor(cwd = process.cwd(), model = 'mistral') {
     this.mem = new MemoryManager(cwd)
+    this.compactor = new MemoryCompactor({
+      maxContextTokens: 4000,
+      keepRecentMessages: 5,
+      compactionTrigger: 0.7,
+      verbose: false,
+    })
     this.session = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       model,
@@ -29,6 +38,7 @@ export class SessionCoordinator {
       files_modified: [],
       tools_used: new Map(),
       errors: 0,
+      compactions: 0,
     }
   }
 
@@ -39,6 +49,24 @@ export class SessionCoordinator {
       content: `Message #${this.session.messages}`,
       metadata: { session: this.session.id },
     })
+  }
+
+  /**
+   * Record context state to memory files
+   * Called after each message to keep memory fresh
+   */
+  recordContextSnapshot(messages: any[]) {
+    // Check if compaction is needed
+    if (this.compactor.shouldCompact(messages)) {
+      this.compactor.compact(messages)
+      this.session.compactions = (this.session.compactions || 0) + 1
+      
+      this.mem.record({
+        type: 'success',
+        content: `Memory compacted (${this.session.compactions}x)`,
+        metadata: { session: this.session.id },
+      })
+    }
   }
 
   recordTool(name: string, result: { ok: boolean; err?: string }) {

@@ -128,6 +128,72 @@ export class Ollama {
     }
   }
 
+  /**
+   * Pull a model from registry (automatic download)
+   */
+  async pull(model: string): Promise<void> {
+    try {
+      const r = await fetch(`${this.url}/api/pull`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: model, stream: false }),
+      })
+
+      if (!r.ok) {
+        throw new Error(`Failed to pull model ${model}: ${r.status} ${r.statusText}`)
+      }
+
+      await r.json()
+    } catch (e) {
+      throw e instanceof Error ? e : new Error(`Failed to pull model: ${String(e)}`)
+    }
+  }
+
+  /**
+   * Stream model pull progress
+   */
+  async *streamPull(model: string): AsyncGenerator<string> {
+    try {
+      const r = await fetch(`${this.url}/api/pull`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: model, stream: true }),
+      })
+
+      if (!r.ok) {
+        throw new Error(`Failed to pull model ${model}: ${r.status}`)
+      }
+
+      const reader = r.body?.getReader()
+      if (!reader) return
+
+      const dec = new TextDecoder()
+      let buf = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buf += dec.decode(value, { stream: true })
+        const lines = buf.split('\n')
+
+        for (let i = 0; i < lines.length - 1; i++) {
+          try {
+            const line = lines[i]!
+            if (line.trim()) {
+              yield line
+            }
+          } catch (e) {
+            // Ignore parse errors
+          }
+        }
+        buf = lines[lines.length - 1]!
+      }
+    } catch (e) {
+      throw e instanceof Error ? e : new Error(`Stream pull error: ${String(e)}`)
+    }
+  }
+
   set(m: string) { this.model = m }
   get() { return this.model }
 }

@@ -1,9 +1,17 @@
 import type { Ctx, Msg } from '../types/index.js'
+import { MemoryCompactor } from './memoryCompactor.js'
 
 export class ContextService {
   ctx: Ctx
+  compactor: MemoryCompactor
 
   constructor(model = 'mistral') {
+    this.compactor = new MemoryCompactor({
+      maxContextTokens: 4000,
+      keepRecentMessages: 5,
+      compactionTrigger: 0.7,
+      verbose: false,
+    })
     this.ctx = {
       msgs: [],
       model,
@@ -76,4 +84,48 @@ Goal: 60-75% fewer tokens, zero technical loss.`,
   clear() { this.ctx.msgs = [] }
 
   setSys(s: string) { this.ctx.sys = s }
+
+  /**
+   * Check if compaction is needed and do it
+   */
+  checkAndCompact(): boolean {
+    if (this.compactor.shouldCompact(this.ctx.msgs)) {
+      this.compactor.compact(this.ctx.msgs)
+      return true
+    }
+    return false
+  }
+
+  /**
+   * Build selective context for small models
+   * Only includes recent messages + relevant facts
+   */
+  async buildSelectiveContext(): Promise<Msg[]> {
+    const { messages, metadata } = await this.compactor.buildSelectiveContext(
+      this.ctx.msgs,
+      this.ctx.msgs[this.ctx.msgs.length - 1]?.content || '',
+    )
+
+    // Inject metadata if available (long-term memory)
+    if (metadata.trim()) {
+      return [
+        { role: 'system', content: this.ctx.sys },
+        { role: 'system', content: `[LONG-TERM CONTEXT]\n${metadata}` },
+        ...messages,
+      ]
+    }
+
+    return [{ role: 'system', content: this.ctx.sys }, ...messages]
+  }
+
+  /**
+   * Get layer memory structure
+   */
+  getLayerMemory() {
+    return {
+      ...this.compactor.getLayerMemory(),
+      working: this.ctx.msgs.slice(-5),
+    }
+  }
 }
+
