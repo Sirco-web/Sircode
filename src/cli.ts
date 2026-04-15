@@ -16,6 +16,7 @@ import { ToolStreamExecutor } from './services/toolStream.js'
 import { FrustrationDetector } from './services/frustration.js'
 import { UncoverMode } from './services/undercover.js'
 import { MemorySystem } from './services/memory.js'
+import { Agent } from './services/agent.js'
 
 const ex = promisify(exec)
 
@@ -323,6 +324,117 @@ p.command('update').action(async () => {
     process.exit(1)
   }
 })
+
+p.command('agent [model]')
+  .description('Autonomous agent mode with thinking and auto-execution')
+  .option('-u, --url <url>', 'Ollama API URL', 'http://localhost:11434')
+  .action(async (model: string | undefined, opts: { url: string }) => {
+    const m = model || 'mistral'
+    console.log(fmt.hdr(`🤖 Sircode Agent: ${m}`))
+
+    const o = new Ollama(m, opts.url)
+    const c = new ContextService(m)
+    const coord = new SessionCoordinator(process.cwd(), m)
+    const agent = new Agent(o, c, coord)
+
+    console.log(chalk.dim('Checking Ollama...'))
+    const ok = await ensureOllama(opts.url)
+    
+    if (!ok) {
+      console.error(chalk.red(`✗ Can't reach Ollama at ${opts.url}`))
+      console.error(chalk.red('Make sure Ollama is installed: https://ollama.ai'))
+      process.exit(1)
+    }
+
+    console.log(chalk.green('✓ OK'))
+    console.log(chalk.cyan('📚 Available Skills:'))
+    const skills = agent.getAvailableSkills()
+    skills.slice(0, 10).forEach(s => console.log(chalk.dim(`  • ${s.name}: ${s.description}`)))
+    if (skills.length > 10) {
+      console.log(chalk.dim(`  ... and ${skills.length - 10} more`))
+    }
+    console.log(chalk.dim(`Session: ${coord.session.id}`))
+    console.log()
+
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+
+    rl.on('close', () => {
+      coord.close()
+      console.log(chalk.dim(`\n📦 Session saved to .code/`))
+    })
+
+    const ask = (): void => {
+      rl.question(chalk.blue('Agent: '), async (inp: string) => {
+        if (inp.toLowerCase() === 'exit') {
+          console.log(chalk.cyan('bye'))
+          rl.close()
+          return
+        }
+
+        if (inp.toLowerCase() === 'help') {
+          console.log(chalk.cyan(`
+Agent Commands:
+  exit          Leave agent mode
+  skills        List all available skills
+  help          Show this help
+  
+Or ask the agent to do anything! Example:
+  "Create a TypeScript utility for validating emails"
+  "Debug this JavaScript error: ${new Error('test').toString()}"
+  "Add unit tests to src/utils.ts"
+          `))
+          ask()
+          return
+        }
+
+        if (inp.toLowerCase() === 'skills') {
+          console.log(chalk.cyan('📚 Available Skills:'))
+          agent.getAvailableSkills().forEach(s => {
+            console.log(chalk.dim(`  ✓ ${s.name} (${s.category}): ${s.description}`))
+            if (s.tools.length > 0) {
+              console.log(chalk.dim(`    Tools: ${s.tools.join(', ')}`))
+            }
+          })
+          ask()
+          return
+        }
+
+        if (!inp.trim()) {
+          ask()
+          return
+        }
+
+        coord.recordMessage()
+        console.log()
+
+        try {
+          // Process request with autonomous agent
+          const result = await agent.processRequest(inp)
+
+          console.log(chalk.green('\n✅ Autonomous execution complete!\n'))
+          console.log(chalk.cyan(`Plan had ${result.thinking.plan.length} steps`))
+          console.log(chalk.green(`Executed ${result.execution.successfulSteps} steps successfully`))
+          
+          if (result.execution.failedSteps > 0) {
+            console.log(chalk.yellow(`⚠️  ${result.execution.failedSteps} steps failed`))
+          }
+
+          if (process.env.DEBUG_EXECUTION) {
+            console.log(chalk.dim('\nDetailed Summary:'))
+            console.log(chalk.dim(result.summary))
+          }
+        } catch (e) {
+          console.error(chalk.red(`\n✗ Agent failed: ${e instanceof Error ? e.message : String(e)}`))
+          coord.session.errors++
+        }
+
+        console.log()
+        ask()
+      })
+    }
+
+    ask()
+  })
 
 p.parse(process.argv)
 if (process.argv.length < 3) p.help()

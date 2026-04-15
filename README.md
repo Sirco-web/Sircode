@@ -5,6 +5,7 @@ Sircode is an **Ollama-powered CLI coding assistant** inspired by the open-sourc
 ## Features
 
 ✨ **Interactive Chat Mode** - Have conversations with a local LLM about code and development  
+🤖 **Autonomous Agent Mode** - Let AI think, plan, and execute tasks automatically without confirmation  
 🛠️ **18+ Built-in Tools** - Execute bash, edit files, read with line numbers, search web, manage tasks  
 🔒 **Privacy-First** - All data stays on your machine (uses local Ollama)  
 ⚡ **Fast & Lightweight** - Written in TypeScript, runs on Node.js/Bun  
@@ -13,6 +14,7 @@ Sircode is an **Ollama-powered CLI coding assistant** inspired by the open-sourc
 💾 **Persistent Memory** - Saves session context to `.code/` directory
 📊 **Session Tracking** - Records files created, tools used, errors, and insights
 🌐 **Web Capabilities** - Fetch URLs and search the internet locally
+🧠 **Pensieve Thinking** - Agent uses internal planning without showing intermediate thinking
 
 ## Prerequisites
 
@@ -130,6 +132,75 @@ python code.py chat
 python code.py models
 python code.py exec "Your question"
 ```
+
+## 🤖 Autonomous Agent Mode (NEW!)
+
+New to Sircode: **Let the AI think and execute without confirmation!**
+
+The agent mode enables true autonomous coding:
+
+```bash
+sircode agent               # Start autonomous agent
+sircode agent neural-chat   # With specific model
+```
+
+### How It Differs from Chat Mode
+
+| Aspect | Chat Mode | Agent Mode |
+|--------|-----------|-----------|
+| Flow | You → AI → You → AI → ... | You → AI thinks → executes → done |
+| Planning | Responds to each message | Creates full plan first |
+| Confirmation | Asks before major actions | Auto-executes plan |
+| Skills | Basic | Full integrated skills |
+| Best for | Learning, exploration | Automation, efficiency |
+
+### Example Agent Session
+
+```
+You: Create a TypeScript utility for email validation
+
+Agent thinks... (internal planning, not shown)
+
+📋 Execution Plan:
+  1. Create utils/email.ts with validation logic
+  2. Add JSDoc comments  
+  3. Create unit tests
+  4. Run tests to verify
+
+💭 Reasoning: Scaffolding a production-ready utility with tests and documentation.
+
+🚀 Executing...
+  ✓ Step 1: File created
+  ✓ Step 2: Comments added
+  ✓ Step 3: Tests created
+  ✓ Step 4: All tests passing
+
+✅ Complete! 3 files created in 2.3 seconds.
+```
+
+### Available Skills in Agent Mode
+
+The agent automatically uses the most relevant skills:
+- 🛠️ **Code Execution** - Create files, run commands, modify code
+- 📚 **Knowledge** - Search web, fetch documentation
+- 🔍 **Analysis** - Find bugs, analyze code quality
+- ✅ **Management** - Create tasks, track progress
+- ✨ **Creativity** - Generate docs, comments, tests
+
+**18+ tools** available automatically! See [SKILLS.md](./SKILLS.md) for complete list.
+
+### Thinking & Planning (Pensieve)
+
+The agent uses "Pensieve mode" for internal thinking:
+- Analyzes your request
+- Creates a detailed execution plan
+- Validates the plan
+- Then executes without showing working
+- Finally shows you the results
+
+This makes interactions faster and more focused.
+
+For full details, see [AGENT.md](./AGENT.md).
 
 ## How It Works
 
