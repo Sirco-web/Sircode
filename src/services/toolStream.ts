@@ -56,12 +56,18 @@ export class ToolStreamExecutor {
       i++
     }
 
-    // Remove processed tools from buffer
+    // Remove processed tools from buffer (keep only unprocessed part)
     if (this.executableTools.length > 0) {
       const lastTool = this.executableTools[this.executableTools.length - 1]
-      const endIdx = this.buffer.indexOf(lastTool.fullText) + lastTool.fullText.length
-      if (endIdx > 0) {
-        this.buffer = this.buffer.substring(endIdx)
+      const toolEnd = this.buffer.indexOf(lastTool.fullText)
+      if (toolEnd >= 0) {
+        const endIdx = toolEnd + lastTool.fullText.length
+        if (endIdx <= this.buffer.length) {
+          this.buffer = this.buffer.substring(endIdx)
+          
+          // Reset last tool tracker
+          const toolToRemove = this.executableTools.shift()
+        }
       }
     }
 
@@ -70,46 +76,88 @@ export class ToolStreamExecutor {
 
   /**
    * Parse tool from text like "bash: echo hello" or "wf: index.html, <html>...</html>"
+   * Handles multi-line content with proper comma-based argument splitting
    */
   private parseTool(toolText: string): { tool: string; args: string[] } | null {
-    const match = /^([a-z_]+):\s*(.*)$/s.exec(toolText.trim())
-    if (!match) return null
+    const trimmed = toolText.trim()
+    const colonIdx = trimmed.indexOf(':')
+    
+    if (colonIdx === -1) return null
 
-    const tool = match[1]
-    const content = match[2]
+    const tool = trimmed.substring(0, colonIdx).trim()
+    const content = trimmed.substring(colonIdx + 1).trim()
 
-    if (['wf', 'fe', 'rep', 'add'].includes(tool)) {
-      // Special parsing for file tools
-      if (tool === 'wf' || tool === 'add') {
-        const commaIdx = content.indexOf(',')
-        if (commaIdx > -1) {
-          return {
-            tool,
-            args: [content.slice(0, commaIdx).trim(), content.slice(commaIdx + 1).trim()]
-          }
-        }
-      } else if (tool === 'rep' || tool === 'fe') {
-        const parts = content.split(',')
-        if (parts.length >= 3) {
-          return {
-            tool,
-            args: [parts[0].trim(), parts[1].trim(), parts.slice(2).join(',').trim()]
-          }
+    // Validate tool name
+    if (!/^[a-z0-9_]+$/.test(tool)) return null
+
+    // Parse arguments based on tool type
+    if (['wf', 'add'].includes(tool)) {
+      // Format: wf: filepath, content
+      const commaIdx = content.indexOf(',')
+      if (commaIdx > 0) {
+        const filepath = content.substring(0, commaIdx).trim()
+        const fileContent = content.substring(commaIdx + 1).trim()
+        return {
+          tool,
+          args: [filepath, fileContent]
         }
       }
+      return null
+    } else if (['fe', 'rep'].includes(tool)) {
+      // Format: fe: filepath, oldtext, newtext
+      // Find first two commas carefully (old and new might have commas)
+      const firstComma = content.indexOf(',')
+      if (firstComma === -1) return null
+      
+      const filepath = content.substring(0, firstComma).trim()
+      const remaining = content.substring(firstComma + 1)
+      
+      // Find second comma
+      const secondComma = remaining.indexOf(',')
+      if (secondComma === -1) return null
+      
+      const oldText = remaining.substring(0, secondComma).trim()
+      const newText = remaining.substring(secondComma + 1).trim()
+      
+      return {
+        tool,
+        args: [filepath, oldText, newText]
+      }
+    } else if (tool === 'bash') {
+      // bash: command (no argument parsing needed)
+      return {
+        tool,
+        args: [content]
+      }
+    } else if (['rf', 'fr'].includes(tool)) {
+      // rf: filepath [offset] [limit]
+      const args = content.split(',').map(a => a.trim()).filter(a => a)
+      return args.length > 0 ? {
+        tool,
+        args
+      } : null
+    } else if (['ws', 'wf2'].includes(tool)) {
+      // ws: search query [maxresults]
+      const args = content.split(',').map(a => a.trim()).filter(a => a)
+      return args.length > 0 ? {
+        tool,
+        args
+      } : null
     }
 
-    return {
-      tool,
-      args: content.split(',').map(a => a.trim()).filter(a => a)
-    }
+    // Default: split by comma
+    const args = content.split(',').map(a => a.trim()).filter(a => a)
+    return args.length > 0 ? { tool, args } : null
   }
 
   /**
-   * Execute a tool immediately
+   * Execute a tool immediately with live output
    */
   async executeTool(call: ToolCall): Promise<string> {
     try {
+      // Show executing indicator
+      console.log(chalk.dim(`  → ${call.tool} ${call.args[0] || ''}`))
+      
       const res = await Promise.resolve(runTool(call.tool, ...call.args))
       const output = this.fmt.res(call.tool, res)
       
