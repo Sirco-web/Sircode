@@ -7,6 +7,8 @@ import { promisify } from 'util'
 import { existsSync, readFileSync } from 'fs'
 import { dirname, resolve } from 'path'
 import { Ollama } from './services/ollama.js'
+import { CloudflareAI } from './services/cloudflare.js'
+import { OpenAIGateway } from './services/openaiGateway.js'
 import { ContextService } from './services/context.js'
 import { SessionCoordinator } from './coordinator/session.js'
 import { run as runTool } from './tools/index.js'
@@ -32,12 +34,49 @@ p.command('chat [model]')
   .option('-u, --url <url>', 'Ollama API URL', 'http://localhost:11434')
   .option('-s, --small-model-mode', 'Enable small model corrector (for 1B-8B models)')
   .option('--server <address>', 'Use remote Sircode server (format: ip:port or ip)')
-  .action(async (model: string | undefined, opts: { url: string; smallModelMode?: boolean; server?: string }) => {
+  .option('-c, --cloudflare <model>', 'Use Cloudflare Workers AI (specify model, e.g. @cf/meta/llama-3.1-8b-instruct)')
+  .option('-o, --openai <model>', 'Use OpenAI via Cloudflare Gateway (specify model, e.g. openai/gpt-5.4-nano)')
+  .action(async (model: string | undefined, opts: { url: string; smallModelMode?: boolean; server?: string; cloudflare?: string; openai?: string }) => {
     const m = model || 'mistral'
     console.log(fmt.hdr(`Sircode: ${m}`))
 
-    // Handle remote server mode
-    if (opts.server) {
+    // Determine which AI backend to use
+    let ai: Ollama | CloudflareAI | OpenAIGateway
+    let useStreaming = true
+
+    if (opts.cloudflare) {
+      // Cloudflare Workers AI mode
+      const cfModel = opts.cloudflare === true ? '' : opts.cloudflare
+      console.log(chalk.cyan('☁️  Using Cloudflare Workers AI'))
+      ai = new CloudflareAI({
+        accountId: process.env.CLOUDFLARE_ACCOUNT_ID || '',
+        apiToken: process.env.CLOUDFLARE_API_TOKEN || '',
+        model: cfModel || '@cf/meta/llama-3.1-8b-instruct',
+      })
+      if (!(await (ai as CloudflareAI).ok())) {
+        console.error(chalk.red('✗ Cloudflare AI not configured'))
+        console.error(chalk.red('Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN env vars'))
+        process.exit(1)
+      }
+      console.log(chalk.green(`✓ Connected to Cloudflare AI`))
+      console.log(chalk.dim(`Model: ${(ai as CloudflareAI).model}`))
+    } else if (opts.openai) {
+      // OpenAI via Cloudflare Gateway mode
+      const openaiModel = opts.openai === true ? '' : opts.openai
+      console.log(chalk.cyan('🔗 Using OpenAI via Cloudflare Gateway'))
+      ai = new OpenAIGateway({
+        accountId: process.env.CLOUDFLARE_ACCOUNT_ID || '',
+        apiToken: process.env.CLOUDFLARE_API_TOKEN || '',
+        model: openaiModel || 'openai/gpt-5.4-nano',
+      })
+      if (!(await (ai as OpenAIGateway).ok())) {
+        console.error(chalk.red('✗ OpenAI Gateway not configured'))
+        console.error(chalk.red('Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN env vars'))
+        process.exit(1)
+      }
+      console.log(chalk.green(`✓ Connected to OpenAI Gateway`))
+      console.log(chalk.dim(`Model: ${(ai as OpenAIGateway).model}`))
+    } else if (opts.server) {
       // Parse server address
       let serverUrl = opts.server
       if (!serverUrl.startsWith('http')) {
@@ -136,10 +175,7 @@ Always use [tool: args] bracket format - never use markdown code blocks!`
 
       ask()
       return
-    }
-
-    // Local mode (original logic)
-    const o = new Ollama(m, opts.url)
+    } else {
     const c = new ContextService(m)
     const coord = new SessionCoordinator(process.cwd(), m)
     const frustration = new FrustrationDetector()

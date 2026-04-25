@@ -1,4 +1,8 @@
 export { Ollama } from './services/ollama.js'
+export { CloudflareAI } from './services/cloudflare.js'
+export { OpenAIGateway } from './services/openaiGateway.js'
+export type { CloudflareAIConfig } from './services/cloudflare.js'
+export type { OpenAIGatewayConfig } from './services/openaiGateway.js'
 export { Exec } from './services/executor.js'
 export { ContextService } from './services/context.js'
 export { Agent } from './services/agent.js'
