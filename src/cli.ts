@@ -4,7 +4,7 @@ import chalk from 'chalk'
 import * as readline from 'readline'
 import { exec } from 'child_process'
 import { promisify } from 'util'
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync, realpathSync } from 'fs'
 import { dirname, resolve } from 'path'
 import { Ollama } from './services/ollama.js'
 import { CloudflareAI } from './services/cloudflare.js'
@@ -44,6 +44,64 @@ p.command('chat [model]')
     let ai: Ollama | CloudflareAI | OpenAIGateway
     let useStreaming = true
 
+    const startInteractiveCloudChat = async (
+      backend: CloudflareAI | OpenAIGateway,
+      label: string,
+    ): Promise<void> => {
+      console.log()
+
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+
+      rl.on('close', () => {
+        console.log(chalk.dim(`\nSession closed for ${label}`))
+      })
+
+      const ask = (): void => {
+        rl.question(chalk.blue('You: '), async (inp: string) => {
+          if (inp.toLowerCase() === 'exit') {
+            console.log(chalk.cyan('bye'))
+            rl.close()
+            return
+          }
+
+          if (inp.toLowerCase() === 'models') {
+            console.log(chalk.cyan((await backend.ls()).join(', ')))
+            ask()
+            return
+          }
+
+          if (!inp.trim()) {
+            ask()
+            return
+          }
+
+          console.log(chalk.dim('streaming...\n'))
+
+          try {
+            let res = ''
+            for await (const chunk of backend.streamChat([
+              { role: 'system', content: 'You are Sircode, a concise coding assistant.' },
+              { role: 'user', content: inp },
+            ])) {
+              process.stdout.write(chalk.green(chunk))
+              res += chunk
+            }
+            console.log('\n')
+
+            if (!res.trim()) {
+              console.log(chalk.yellow('No response returned.'))
+            }
+          } catch (e) {
+            console.error(chalk.red(`\n✗ ${e instanceof Error ? e.message : String(e)}`))
+          }
+
+          ask()
+        })
+      }
+
+      ask()
+    }
+
     if (opts.cloudflare) {
       // Cloudflare Workers AI mode
       const cfModel = opts.cloudflare
@@ -60,6 +118,8 @@ p.command('chat [model]')
       }
       console.log(chalk.green(`✓ Connected to Cloudflare AI`))
       console.log(chalk.dim(`Model: ${(ai as CloudflareAI).model}`))
+      await startInteractiveCloudChat(ai as CloudflareAI, 'Cloudflare Workers AI')
+      return
     } else if (opts.openai) {
       // OpenAI via Cloudflare Gateway mode
       const openaiModel = opts.openai
@@ -76,6 +136,8 @@ p.command('chat [model]')
       }
       console.log(chalk.green(`✓ Connected to OpenAI Gateway`))
       console.log(chalk.dim(`Model: ${(ai as OpenAIGateway).model}`))
+      await startInteractiveCloudChat(ai as OpenAIGateway, 'OpenAI Gateway')
+      return
     } else if (opts.server) {
       // Parse server address
       let serverUrl = opts.server
@@ -472,19 +534,26 @@ p.command('context').action(async () => {
 
 p.command('update').action(async () => {
   try {
-    // Determine Sircode directory
-    let sirDir = process.env.SIRCODE_INSTALL_DIR || `${process.env.HOME}/.local/share/sircode`
-    
-    // If default location doesn't exist, try to use the location of this script
-    if (!existsSync(`${sirDir}/.git`)) {
-      const scriptDir = dirname(process.argv[1])
-      const repoDir = resolve(scriptDir, '..')
-      if (existsSync(`${repoDir}/.git`)) {
-        sirDir = repoDir
+    const findSircodeRepo = (): string | null => {
+      const envDir = process.env.SIRCODE_INSTALL_DIR
+      if (envDir && existsSync(`${envDir}/.git`)) return envDir
+
+      try {
+        const scriptPath = process.argv[1] ? realpathSync(process.argv[1]) : ''
+        const repoDir = resolve(dirname(scriptPath), '..')
+        if (existsSync(`${repoDir}/.git`)) return repoDir
+      } catch {
+        // Ignore resolution failures and fall through to the default install dir.
       }
+
+      const defaultDir = `${process.env.HOME}/.local/share/sircode`
+      if (existsSync(`${defaultDir}/.git`)) return defaultDir
+      return null
     }
-    
-    if (!existsSync(`${sirDir}/.git`)) {
+
+    const sirDir = findSircodeRepo()
+
+    if (!sirDir) {
       console.error(chalk.red('✗ Sircode repo not found'))
       console.error(chalk.yellow('Please run: curl -sSL https://raw.githubusercontent.com/Sirco-web/Sircode/main/install.sh | bash'))
       process.exit(1)
@@ -521,6 +590,19 @@ interface SircodeSettings {
   cloudflareApiToken: string
 }
 
+const defaultSettings = (): SircodeSettings => ({
+  provider: 'ollama',
+  model: 'mistral',
+  url: 'http://localhost:11434',
+  cloudflareAccountId: '',
+  cloudflareApiToken: '',
+})
+
+const mergeSettings = (settings: Partial<SircodeSettings> | null | undefined): SircodeSettings => ({
+  ...defaultSettings(),
+  ...(settings ?? {}),
+})
+
 const getSettingsPath = (): string => {
   const configDir = `${process.env.HOME}/.config/sircode`
   return `${configDir}/settings.json`
@@ -545,7 +627,8 @@ const saveSettings = (settings: SircodeSettings): void => {
   writeFileSync(path, JSON.stringify(settings, null, 2))
 }
 
-const promptForSettings = async (): Promise<SircodeSettings> => {
+const promptForSettings = async (existing?: SircodeSettings): Promise<SircodeSettings> => {
+  const current = mergeSettings(existing)
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
   
   const question = (prompt: string): Promise<string> => {
@@ -561,34 +644,39 @@ const promptForSettings = async (): Promise<SircodeSettings> => {
   console.log('  2) cloudflare - Cloudflare Workers AI')
   console.log('  3) openai    - OpenAI via Cloudflare Gateway')
   
-  const providerAns = await question(chalk.blue('Provider [1-3]: '))
+  const providerLabel: Record<SircodeSettings['provider'], string> = {
+    ollama: '1',
+    cloudflare: '2',
+    openai: '3',
+  }
+  const providerAns = await question(chalk.blue(`Provider [1-3] (${providerLabel[current.provider]}): `))
   const providerMap: Record<string, SircodeSettings['provider']> = {
     '1': 'ollama', '2': 'cloudflare', '3': 'openai'
   }
-  const provider = providerMap[providerAns] || 'ollama'
+  const provider = providerMap[providerAns] || current.provider
 
   // Model
-  let model = 'mistral'
+  let model = current.model
   if (provider === 'ollama') {
-    model = await question(chalk.blue('Model [mistral]: ')) || 'mistral'
+    model = await question(chalk.blue(`Model [${current.model}]: `)) || current.model
   } else if (provider === 'cloudflare') {
-    model = await question(chalk.blue('Cloudflare model [@cf/meta/llama-3.1-8b-instruct]: ')) || '@cf/meta/llama-3.1-8b-instruct'
+    model = await question(chalk.blue(`Cloudflare model [${current.model}]: `)) || current.model
   } else {
-    model = await question(chalk.blue('OpenAI model [openai/gpt-5.4-nano]: ')) || 'openai/gpt-5.4-nano'
+    model = await question(chalk.blue(`OpenAI model [${current.model}]: `)) || current.model
   }
 
   // URL (for Ollama)
-  let url = 'http://localhost:11434'
+  let url = current.url
   if (provider === 'ollama') {
-    url = await question(chalk.blue('Ollama URL [http://localhost:11434]: ')) || 'http://localhost:11434'
+    url = await question(chalk.blue(`Ollama URL [${current.url}]: `)) || current.url
   }
 
   // Cloudflare credentials
-  let cloudflareAccountId = ''
-  let cloudflareApiToken = ''
+  let cloudflareAccountId = current.cloudflareAccountId
+  let cloudflareApiToken = current.cloudflareApiToken
   if (provider === 'cloudflare' || provider === 'openai') {
-    cloudflareAccountId = await question(chalk.blue('Cloudflare Account ID: '))
-    cloudflareApiToken = await question(chalk.blue('Cloudflare API Token: '))
+    cloudflareAccountId = await question(chalk.blue(`Cloudflare Account ID [${current.cloudflareAccountId || 'empty'}]: `)) || current.cloudflareAccountId
+    cloudflareApiToken = await question(chalk.blue(`Cloudflare API Token [${current.cloudflareApiToken ? 'set' : 'empty'}]: `)) || current.cloudflareApiToken
   }
 
   rl.close()
@@ -596,14 +684,178 @@ const promptForSettings = async (): Promise<SircodeSettings> => {
   return { provider, model, url, cloudflareAccountId, cloudflareApiToken }
 }
 
-p.command('settings')
+const renderSettingsSummary = (settings: SircodeSettings | null): void => {
+  console.log(fmt.hdr('Sircode Settings'))
+  if (!settings) {
+    console.log(chalk.yellow('No settings configured'))
+    return
+  }
+
+  console.log(chalk.cyan('Current Configuration:'))
+  console.log(`  Provider: ${settings.provider}`)
+  console.log(`  Model: ${settings.model}`)
+  console.log(`  URL: ${settings.url}`)
+  if (settings.cloudflareAccountId) {
+    console.log(`  Cloudflare Account: ${chalk.dim(settings.cloudflareAccountId.slice(0, 8))}...`)
+    console.log(`  Cloudflare Token: ${chalk.dim('*'.repeat(8))}...`)
+  } else {
+    console.log(`  Cloudflare: ${chalk.dim('not configured')}`)
+  }
+}
+
+const runSettingsMenu = async (): Promise<void> => {
+  let settings = mergeSettings(loadSettings())
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+
+  const question = (prompt: string): Promise<string> => {
+    return new Promise(resolve => rl.question(prompt, resolve))
+  }
+
+  const pause = async (): Promise<void> => {
+    await question(chalk.dim('\nPress Enter to continue...'))
+  }
+
+  const refresh = (): void => {
+    settings = mergeSettings(loadSettings())
+  }
+
+  const editProvider = async (): Promise<void> => {
+    console.log(chalk.cyan('\nSelect provider:'))
+    console.log('  1) ollama')
+    console.log('  2) cloudflare')
+    console.log('  3) openai')
+    const next = await question(chalk.blue(`Provider [${settings.provider}]: `))
+    const providerMap: Record<string, SircodeSettings['provider']> = {
+      '1': 'ollama',
+      '2': 'cloudflare',
+      '3': 'openai',
+    }
+    const provider = providerMap[next] || settings.provider
+    settings = { ...settings, provider }
+    saveSettings(settings)
+    console.log(chalk.green('✓ Provider updated'))
+  }
+
+  const editModel = async (): Promise<void> => {
+    const label = settings.provider === 'ollama'
+      ? 'Model'
+      : settings.provider === 'cloudflare'
+        ? 'Cloudflare model'
+        : 'OpenAI model'
+    const value = await question(chalk.blue(`${label} [${settings.model}]: `))
+    settings = { ...settings, model: value || settings.model }
+    saveSettings(settings)
+    console.log(chalk.green('✓ Model updated'))
+  }
+
+  const editUrl = async (): Promise<void> => {
+    const value = await question(chalk.blue(`Ollama URL [${settings.url}]: `))
+    settings = { ...settings, url: value || settings.url }
+    saveSettings(settings)
+    console.log(chalk.green('✓ URL updated'))
+  }
+
+  const editCredentials = async (): Promise<void> => {
+    const accountId = await question(chalk.blue(`Cloudflare Account ID [${settings.cloudflareAccountId || 'empty'}]: `))
+    const token = await question(chalk.blue(`Cloudflare API Token [${settings.cloudflareApiToken ? 'set' : 'empty'}]: `))
+    settings = {
+      ...settings,
+      cloudflareAccountId: accountId || settings.cloudflareAccountId,
+      cloudflareApiToken: token || settings.cloudflareApiToken,
+    }
+    saveSettings(settings)
+    console.log(chalk.green('✓ Cloudflare credentials updated'))
+  }
+
+  const resetAll = async (): Promise<void> => {
+    const next = await promptForSettings(settings)
+    settings = next
+    saveSettings(settings)
+    console.log(chalk.green('✓ Settings saved'))
+  }
+
+  const clearAll = async (): Promise<void> => {
+    const path = getSettingsPath()
+    if (existsSync(path)) {
+      const fs = await import('fs')
+      fs.unlinkSync(path)
+      settings = mergeSettings(null)
+      console.log(chalk.green('✓ Settings cleared'))
+    } else {
+      console.log(chalk.yellow('No settings to clear'))
+    }
+  }
+
+  const menu = async (): Promise<void> => {
+    refresh()
+    console.log()
+    renderSettingsSummary(loadSettings())
+    console.log(chalk.cyan('\nMenu:'))
+    console.log('  1) Edit provider')
+    console.log('  2) Edit model')
+    console.log('  3) Edit URL')
+    console.log('  4) Edit Cloudflare credentials')
+    console.log('  5) Re-run full setup')
+    console.log('  6) Clear settings')
+    console.log('  7) Refresh')
+    console.log('  0) Exit')
+
+    const choice = (await question(chalk.blue('\nSelect an option: '))).trim()
+
+    switch (choice) {
+      case '1':
+        await editProvider()
+        break
+      case '2':
+        await editModel()
+        break
+      case '3':
+        await editUrl()
+        break
+      case '4':
+        await editCredentials()
+        break
+      case '5':
+        await resetAll()
+        break
+      case '6':
+        await clearAll()
+        break
+      case '7':
+        refresh()
+        console.log(chalk.green('✓ Refreshed'))
+        break
+      case '0':
+      case 'exit':
+      case 'quit':
+        rl.close()
+        return
+      default:
+        console.log(chalk.yellow('Unknown option'))
+        break
+    }
+
+    await pause()
+    await menu()
+  }
+
+  rl.on('close', () => {
+    console.log(chalk.dim('\nLeaving settings menu'))
+  })
+
+  await menu()
+}
+
+p.command('settings [action]')
   .description('Manage Sircode settings (default provider, API tokens)')
   .action(async (action?: string) => {
-    const settings = loadSettings()
+    if (!action) {
+      await runSettingsMenu()
+      return
+    }
 
     if (action === 'set') {
-      // Interactive setup
-      const newSettings = await promptForSettings()
+      const newSettings = await promptForSettings(loadSettings() ?? undefined)
       saveSettings(newSettings)
       console.log(chalk.green('\n✅ Settings saved!'))
       return
@@ -621,25 +873,8 @@ p.command('settings')
       return
     }
 
-    // Show current settings
-    console.log(fmt.hdr('Sircode Settings'))
-    if (settings) {
-      console.log(chalk.cyan('Current Configuration:'))
-      console.log(`  Provider: ${settings.provider}`)
-      console.log(`  Model: ${settings.model}`)
-      console.log(`  URL: ${settings.url}`)
-      if (settings.cloudflareAccountId) {
-        console.log(`  Cloudflare Account: ${chalk.dim(settings.cloudflareAccountId.slice(0, 8))}...`)
-        console.log(`  Cloudflare Token: ${chalk.dim('*'.repeat(8))}...`)
-      } else {
-        console.log(`  Cloudflare: ${chalk.dim('not configured')}`)
-      }
-      console.log(chalk.dim('\nTo change: sircode settings set'))
-      console.log(chalk.dim('To clear: sircode settings clear'))
-    } else {
-      console.log(chalk.yellow('No settings configured'))
-      console.log(chalk.dim('Run: sircode settings set'))
-    }
+    console.log(chalk.yellow(`Unknown settings action: ${action}`))
+    console.log(chalk.dim('Run: sircode settings'))
   })
 
 p.command('agent [model]')
@@ -803,4 +1038,3 @@ p.command('server')
 
 p.parse(process.argv)
 if (process.argv.length < 3) p.help()
-
