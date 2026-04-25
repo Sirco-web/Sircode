@@ -25,6 +25,90 @@ import { GPUDetector } from './services/gpuDetector.js'
 
 const ex = promisify(exec)
 
+// Settings configuration
+interface SircodeSettings {
+  provider: 'ollama' | 'cloudflare' | 'openai'
+  model: string
+  url: string
+  cloudflareAccountId: string
+  cloudflareApiToken: string
+}
+
+const getSettingsPath = (): string => {
+  const configDir = `${process.env.HOME}/.config/sircode`
+  return `${configDir}/settings.json`
+}
+
+const loadSettings = (): SircodeSettings | null => {
+  const path = getSettingsPath()
+  if (!existsSync(path)) return null
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+const saveSettings = (settings: SircodeSettings): void => {
+  const path = getSettingsPath()
+  const dir = dirname(path)
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+  }
+  writeFileSync(path, JSON.stringify(settings, null, 2))
+}
+
+const promptForSettings = async (): Promise<SircodeSettings> => {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  
+  const question = (prompt: string): Promise<string> => {
+    return new Promise(resolve => rl.question(prompt, resolve))
+  }
+
+  console.log(fmt.hdr('Sircode Settings'))
+  console.log(chalk.dim('Configure your default AI provider and credentials\n'))
+
+  // Provider selection
+  console.log('Select default provider:')
+  console.log('  1) ollama    - Local Ollama (default)')
+  console.log('  2) cloudflare - Cloudflare Workers AI')
+  console.log('  3) openai    - OpenAI via Cloudflare Gateway')
+  
+  const providerAns = await question(chalk.blue('Provider [1-3]: '))
+  const providerMap: Record<string, SircodeSettings['provider']> = {
+    '1': 'ollama', '2': 'cloudflare', '3': 'openai'
+  }
+  const provider = providerMap[providerAns] || 'ollama'
+
+  // Model
+  let model = 'mistral'
+  if (provider === 'ollama') {
+    model = await question(chalk.blue('Model [mistral]: ')) || 'mistral'
+  } else if (provider === 'cloudflare') {
+    model = await question(chalk.blue('Cloudflare model [@cf/meta/llama-3.1-8b-instruct]: ')) || '@cf/meta/llama-3.1-8b-instruct'
+  } else {
+    model = await question(chalk.blue('OpenAI model [openai/gpt-5.4-nano]: ')) || 'openai/gpt-5.4-nano'
+  }
+
+  // URL (for Ollama)
+  let url = 'http://localhost:11434'
+  if (provider === 'ollama') {
+    url = await question(chalk.blue('Ollama URL [http://localhost:11434]: ')) || 'http://localhost:11434'
+  }
+
+  // Cloudflare credentials
+  let cloudflareAccountId = ''
+  let cloudflareApiToken = ''
+  if (provider === 'cloudflare' || provider === 'openai') {
+    cloudflareAccountId = await question(chalk.blue('Cloudflare Account ID: '))
+    cloudflareApiToken = await question(chalk.blue('Cloudflare API Token: '))
+  }
+
+  rl.close()
+
+  return { provider, model, url, cloudflareAccountId, cloudflareApiToken }
+}
+
 const p = new Command()
   .name('sircode')
   .description('Autonomous CLI coding assistant')
@@ -36,42 +120,62 @@ p.command('chat [model]')
   .option('--server <address>', 'Use remote Sircode server (format: ip:port or ip)')
   .option('-c, --cloudflare <model>', 'Use Cloudflare Workers AI (specify model, e.g. @cf/meta/llama-3.1-8b-instruct)')
   .option('-o, --openai <model>', 'Use OpenAI via Cloudflare Gateway (specify model, e.g. openai/gpt-5.4-nano)')
-  .action(async (model: string | undefined, opts: { url: string; smallModelMode?: boolean; server?: string; cloudflare?: string; openai?: string }) => {
-    const m = model || 'mistral'
+  .option('--force-provider <provider>', 'Force a specific provider (ollama, cloudflare, openai)')
+  .action(async (model: string | undefined, opts: { url: string; smallModelMode?: boolean; server?: string; cloudflare?: string; openai?: string; forceProvider?: string }) => {
+    // Load saved settings for defaults (lazy load to avoid hoisting issues)
+    const savedSettings = (): SircodeSettings | null => {
+      const path = getSettingsPath()
+      if (!existsSync(path)) return null
+      try {
+        return JSON.parse(readFileSync(path, 'utf8'))
+      } catch {
+        return null
+      }
+    }
+    
+    // Apply saved settings as defaults if not overridden by CLI args
+    const defaults = savedSettings()
+    const defaultModel = defaults?.model || 'mistral'
+    const defaultUrl = defaults?.url || 'http://localhost:11434'
+    
+    const m = model || defaultModel
     console.log(fmt.hdr(`Sircode: ${m}`))
 
     // Determine which AI backend to use
     let ai: Ollama | CloudflareAI | OpenAIGateway
     let useStreaming = true
 
-    if (opts.cloudflare) {
+    // Check for forced provider or saved default
+    const provider = opts.forceProvider || (defaults?.provider || 'ollama')
+
+    if (opts.cloudflare || provider === 'cloudflare') {
       // Cloudflare Workers AI mode
-      const cfModel = opts.cloudflare
+      const cfModel = opts.cloudflare || (defaults?.provider === 'cloudflare' ? defaults.model : '@cf/meta/llama-3.1-8b-instruct')
       console.log(chalk.cyan('☁️  Using Cloudflare Workers AI'))
       ai = new CloudflareAI({
-        accountId: process.env.CLOUDFLARE_ACCOUNT_ID || '',
-        apiToken: process.env.CLOUDFLARE_API_TOKEN || '',
-        model: cfModel || '@cf/meta/llama-3.1-8b-instruct',
+        accountId: process.env.CLOUDFLARE_ACCOUNT_ID || defaults?.cloudflareAccountId || '',
+        apiToken: process.env.CLOUDFLARE_API_TOKEN || defaults?.cloudflareApiToken || '',
+        model: cfModel,
       })
       if (!(await (ai as CloudflareAI).ok())) {
         console.error(chalk.red('✗ Cloudflare AI not configured'))
-        console.error(chalk.red('Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN env vars'))
+        console.error(chalk.red('Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN env vars or run: sircode settings set'))
         process.exit(1)
       }
       console.log(chalk.green(`✓ Connected to Cloudflare AI`))
       console.log(chalk.dim(`Model: ${(ai as CloudflareAI).model}`))
-    } else if (opts.openai) {
+    } else if (opts.openai || provider === 'openai') {
       // OpenAI via Cloudflare Gateway mode
-      const openaiModel = opts.openai
+      const openaiModel = opts.openai || (savedSettings?.provider === 'openai' ? savedSettings.model : 'openai/gpt-5.4-nano')
       console.log(chalk.cyan('🔗 Using OpenAI via Cloudflare Gateway'))
       ai = new OpenAIGateway({
-        accountId: process.env.CLOUDFLARE_ACCOUNT_ID || '',
-        apiToken: process.env.CLOUDFLARE_API_TOKEN || '',
-        model: openaiModel || 'openai/gpt-5.4-nano',
+        accountId: process.env.CLOUDFLARE_ACCOUNT_ID || savedSettings?.cloudflareAccountId || '',
+        apiToken: process.env.CLOUDFLARE_API_TOKEN || savedSettings?.cloudflareApiToken || '',
+        model: openaiModel,
       })
       if (!(await (ai as OpenAIGateway).ok())) {
         console.error(chalk.red('✗ OpenAI Gateway not configured'))
-        console.error(chalk.red('Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN env vars'))
+        console.error(chalk.red('Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN env vars or run: sircode settings set'))
         process.exit(1)
       }
       console.log(chalk.green(`✓ Connected to OpenAI Gateway`))
@@ -177,7 +281,7 @@ Always use [tool: args] bracket format - never use markdown code blocks!`
       return
     } else {
     // Initialize Ollama for local mode
-    const o = new Ollama(m, opts.url)
+    const o = new Ollama(m, opts.url || defaultUrl)
     const c = new ContextService(m)
     const coord = new SessionCoordinator(process.cwd(), m)
     const frustration = new FrustrationDetector()
@@ -185,10 +289,10 @@ Always use [tool: args] bracket format - never use markdown code blocks!`
     const memory = new MemorySystem()
 
     console.log(chalk.dim('Checking Ollama...'))
-    const ok = await ensureOllama(opts.url)
+    const ok = await ensureOllama(opts.url || defaultUrl)
     
     if (!ok) {
-      console.error(chalk.red(`✗ Can't reach Ollama at ${opts.url}`))
+      console.error(chalk.red(`✗ Can't reach Ollama at ${opts.url || defaultUrl}`))
       console.error(chalk.red('Make sure Ollama is installed: https://ollama.ai'))
       process.exit(1)
     }
