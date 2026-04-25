@@ -30,13 +30,7 @@ const p = new Command()
   .description('Autonomous CLI coding assistant')
   .version('0.1.0')
 
-p.command('chat [model]')
-  .option('-u, --url <url>', 'Ollama API URL', 'http://localhost:11434')
-  .option('-s, --small-model-mode', 'Enable small model corrector (for 1B-8B models)')
-  .option('--server <address>', 'Use remote Sircode server (format: ip:port or ip)')
-  .option('-c, --cloudflare <model>', 'Use Cloudflare Workers AI (specify model, e.g. @cf/meta/llama-3.1-8b-instruct)')
-  .option('-o, --openai <model>', 'Use OpenAI via Cloudflare Gateway (specify model, e.g. openai/gpt-5.4-nano)')
-  .action(async (model: string | undefined, opts: { url: string; smallModelMode?: boolean; server?: string; cloudflare?: string; openai?: string }) => {
+const runChat = async (model: string | undefined, opts: { url: string; smallModelMode?: boolean; server?: string; cloudflare?: string; openai?: string }): Promise<void> => {
     const m = model || 'mistral'
     console.log(fmt.hdr(`Sircode: ${m}`))
 
@@ -406,6 +400,16 @@ Always use [tool: args] bracket format - never use markdown code blocks!`
 
     ask()
   }
+
+}
+
+p.command('chat [model]')
+  .option('-u, --url <url>', 'Ollama API URL', 'http://localhost:11434')
+  .option('-s, --small-model-mode', 'Enable small model corrector (for 1B-8B models)')
+  .option('--server <address>', 'Use remote Sircode server (format: ip:port or ip)')
+  .option('-c, --cloudflare <model>', 'Use Cloudflare Workers AI (specify model, e.g. @cf/meta/llama-3.1-8b-instruct)')
+  .option('-o, --openai <model>', 'Use OpenAI via Cloudflare Gateway (specify model, e.g. openai/gpt-5.4-nano)')
+  .action(runChat)
 
 p.command('models')
   .option('-u, --url <url>', 'Ollama API URL', 'http://localhost:11434')
@@ -1033,8 +1037,6 @@ p.command('server')
       process.exit(1)
     }
   })
-
-})
 
 p.parse(process.argv)
 if (process.argv.length < 3) p.help()
