@@ -57,7 +57,7 @@ export class OpenAIGateway {
     ]
   }
 
-  async chat(msgs: Msg[], opts?: Opts): Promise<string> {
+  async chat(msgs: Msg[], opts?: Partial<Opts> & Record<string, any>): Promise<string> {
     const ctrl = new AbortController()
     const timeout = setTimeout(() => ctrl.abort(), 300000)
 
@@ -92,7 +92,7 @@ export class OpenAIGateway {
     }
   }
 
-  async *streamChat(msgs: Msg[], opts?: Opts): AsyncGenerator<string> {
+  async *streamChat(msgs: Msg[], opts?: Partial<Opts> & Record<string, any>): AsyncGenerator<string> {
     const ctrl = new AbortController()
     const timeout = setTimeout(() => ctrl.abort(), 300000)
 
@@ -147,15 +147,15 @@ export class OpenAIGateway {
     }
   }
 
-  async *stream(msgs: Msg[], opts?: Opts): AsyncGenerator<string> {
+  async *stream(msgs: Msg[], opts?: Partial<Opts> & Record<string, any>): AsyncGenerator<string> {
     yield* this.streamChat(msgs, opts)
   }
 
-  private buildOptions(opts?: Opts): Record<string, unknown> {
+  private buildOptions(opts?: Partial<Opts> & Record<string, any>): Record<string, unknown> {
     const options: Record<string, unknown> = {}
-    if (opts?.temperature) options.temperature = opts.temperature
-    if (opts?.max_tokens) options.max_tokens = opts.max_tokens
-    if (opts?.top_p) options.top_p = opts.top_p
+    if (opts?.temperature !== undefined) options.temperature = opts.temperature
+    if (opts?.max_tokens !== undefined) options.max_tokens = opts.max_tokens
+    if (opts?.top_p !== undefined) options.top_p = opts.top_p
     return options
   }
 

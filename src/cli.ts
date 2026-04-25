@@ -4,7 +4,7 @@ import chalk from 'chalk'
 import * as readline from 'readline'
 import { exec } from 'child_process'
 import { promisify } from 'util'
-import { existsSync, readFileSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { dirname, resolve } from 'path'
 import { Ollama } from './services/ollama.js'
 import { CloudflareAI } from './services/cloudflare.js'
@@ -46,7 +46,7 @@ p.command('chat [model]')
 
     if (opts.cloudflare) {
       // Cloudflare Workers AI mode
-      const cfModel = opts.cloudflare === true ? '' : opts.cloudflare
+      const cfModel = opts.cloudflare
       console.log(chalk.cyan('☁️  Using Cloudflare Workers AI'))
       ai = new CloudflareAI({
         accountId: process.env.CLOUDFLARE_ACCOUNT_ID || '',
@@ -62,7 +62,7 @@ p.command('chat [model]')
       console.log(chalk.dim(`Model: ${(ai as CloudflareAI).model}`))
     } else if (opts.openai) {
       // OpenAI via Cloudflare Gateway mode
-      const openaiModel = opts.openai === true ? '' : opts.openai
+      const openaiModel = opts.openai
       console.log(chalk.cyan('🔗 Using OpenAI via Cloudflare Gateway'))
       ai = new OpenAIGateway({
         accountId: process.env.CLOUDFLARE_ACCOUNT_ID || '',
@@ -176,6 +176,8 @@ Always use [tool: args] bracket format - never use markdown code blocks!`
       ask()
       return
     } else {
+    // Initialize Ollama for local mode
+    const o = new Ollama(m, opts.url)
     const c = new ContextService(m)
     const coord = new SessionCoordinator(process.cwd(), m)
     const frustration = new FrustrationDetector()
@@ -510,6 +512,136 @@ p.command('update').action(async () => {
   }
 })
 
+// Settings configuration
+interface SircodeSettings {
+  provider: 'ollama' | 'cloudflare' | 'openai'
+  model: string
+  url: string
+  cloudflareAccountId: string
+  cloudflareApiToken: string
+}
+
+const getSettingsPath = (): string => {
+  const configDir = `${process.env.HOME}/.config/sircode`
+  return `${configDir}/settings.json`
+}
+
+const loadSettings = (): SircodeSettings | null => {
+  const path = getSettingsPath()
+  if (!existsSync(path)) return null
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+const saveSettings = (settings: SircodeSettings): void => {
+  const path = getSettingsPath()
+  const dir = dirname(path)
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+  }
+  writeFileSync(path, JSON.stringify(settings, null, 2))
+}
+
+const promptForSettings = async (): Promise<SircodeSettings> => {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  
+  const question = (prompt: string): Promise<string> => {
+    return new Promise(resolve => rl.question(prompt, resolve))
+  }
+
+  console.log(fmt.hdr('Sircode Settings'))
+  console.log(chalk.dim('Configure your default AI provider and credentials\n'))
+
+  // Provider selection
+  console.log('Select default provider:')
+  console.log('  1) ollama    - Local Ollama (default)')
+  console.log('  2) cloudflare - Cloudflare Workers AI')
+  console.log('  3) openai    - OpenAI via Cloudflare Gateway')
+  
+  const providerAns = await question(chalk.blue('Provider [1-3]: '))
+  const providerMap: Record<string, SircodeSettings['provider']> = {
+    '1': 'ollama', '2': 'cloudflare', '3': 'openai'
+  }
+  const provider = providerMap[providerAns] || 'ollama'
+
+  // Model
+  let model = 'mistral'
+  if (provider === 'ollama') {
+    model = await question(chalk.blue('Model [mistral]: ')) || 'mistral'
+  } else if (provider === 'cloudflare') {
+    model = await question(chalk.blue('Cloudflare model [@cf/meta/llama-3.1-8b-instruct]: ')) || '@cf/meta/llama-3.1-8b-instruct'
+  } else {
+    model = await question(chalk.blue('OpenAI model [openai/gpt-5.4-nano]: ')) || 'openai/gpt-5.4-nano'
+  }
+
+  // URL (for Ollama)
+  let url = 'http://localhost:11434'
+  if (provider === 'ollama') {
+    url = await question(chalk.blue('Ollama URL [http://localhost:11434]: ')) || 'http://localhost:11434'
+  }
+
+  // Cloudflare credentials
+  let cloudflareAccountId = ''
+  let cloudflareApiToken = ''
+  if (provider === 'cloudflare' || provider === 'openai') {
+    cloudflareAccountId = await question(chalk.blue('Cloudflare Account ID: '))
+    cloudflareApiToken = await question(chalk.blue('Cloudflare API Token: '))
+  }
+
+  rl.close()
+
+  return { provider, model, url, cloudflareAccountId, cloudflareApiToken }
+}
+
+p.command('settings')
+  .description('Manage Sircode settings (default provider, API tokens)')
+  .action(async (action?: string) => {
+    const settings = loadSettings()
+
+    if (action === 'set') {
+      // Interactive setup
+      const newSettings = await promptForSettings()
+      saveSettings(newSettings)
+      console.log(chalk.green('\n✅ Settings saved!'))
+      return
+    }
+
+    if (action === 'clear') {
+      const path = getSettingsPath()
+      if (existsSync(path)) {
+        const fs = await import('fs')
+        fs.unlinkSync(path)
+        console.log(chalk.green('✓ Settings cleared'))
+      } else {
+        console.log(chalk.yellow('No settings to clear'))
+      }
+      return
+    }
+
+    // Show current settings
+    console.log(fmt.hdr('Sircode Settings'))
+    if (settings) {
+      console.log(chalk.cyan('Current Configuration:'))
+      console.log(`  Provider: ${settings.provider}`)
+      console.log(`  Model: ${settings.model}`)
+      console.log(`  URL: ${settings.url}`)
+      if (settings.cloudflareAccountId) {
+        console.log(`  Cloudflare Account: ${chalk.dim(settings.cloudflareAccountId.slice(0, 8))}...`)
+        console.log(`  Cloudflare Token: ${chalk.dim('*'.repeat(8))}...`)
+      } else {
+        console.log(`  Cloudflare: ${chalk.dim('not configured')}`)
+      }
+      console.log(chalk.dim('\nTo change: sircode settings set'))
+      console.log(chalk.dim('To clear: sircode settings clear'))
+    } else {
+      console.log(chalk.yellow('No settings configured'))
+      console.log(chalk.dim('Run: sircode settings set'))
+    }
+  })
+
 p.command('agent [model]')
   .description('Autonomous agent mode with thinking and auto-execution')
   .option('-u, --url <url>', 'Ollama API URL', 'http://localhost:11434')
@@ -667,5 +799,8 @@ p.command('server')
     }
   })
 
+})
+
 p.parse(process.argv)
 if (process.argv.length < 3) p.help()
+
