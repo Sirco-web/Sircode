@@ -341,7 +341,7 @@ Always use [tool: args] bracket format - never use markdown code blocks!`
     }
 
     ask()
-  })
+  }
 
 p.command('models')
   .option('-u, --url <url>', 'Ollama API URL', 'http://localhost:11434')
