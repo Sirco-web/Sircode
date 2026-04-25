@@ -31,8 +31,22 @@ const p = new Command()
   .version('0.1.0')
 
 const runChat = async (model: string | undefined, opts: { url: string; smallModelMode?: boolean; server?: string; cloudflare?: string; openai?: string }): Promise<void> => {
-    const m = model || 'mistral'
-    console.log(fmt.hdr(`Sircode: ${m}`))
+    const savedSettings = mergeSettings(loadSettings())
+    const activeProvider: SircodeSettings['provider'] = opts.cloudflare
+      ? 'cloudflare'
+      : opts.openai
+        ? 'openai'
+        : opts.server
+          ? 'ollama'
+          : savedSettings.provider
+
+    const activeModel =
+      model ||
+      (activeProvider === 'cloudflare' ? savedSettings.model || '@cf/meta/llama-3.1-8b-instruct'
+        : activeProvider === 'openai' ? savedSettings.model || 'openai/gpt-5.4-nano'
+        : savedSettings.model || 'mistral')
+
+    console.log(fmt.hdr(`Sircode: ${activeModel}`))
 
     // Determine which AI backend to use
     let ai: Ollama | CloudflareAI | OpenAIGateway
@@ -96,13 +110,13 @@ const runChat = async (model: string | undefined, opts: { url: string; smallMode
       ask()
     }
 
-    if (opts.cloudflare) {
+    if (activeProvider === 'cloudflare') {
       // Cloudflare Workers AI mode
-      const cfModel = opts.cloudflare
+      const cfModel = opts.cloudflare || activeModel
       console.log(chalk.cyan('☁️  Using Cloudflare Workers AI'))
       ai = new CloudflareAI({
-        accountId: process.env.CLOUDFLARE_ACCOUNT_ID || '',
-        apiToken: process.env.CLOUDFLARE_API_TOKEN || '',
+        accountId: savedSettings.cloudflareAccountId || process.env.CLOUDFLARE_ACCOUNT_ID || '',
+        apiToken: savedSettings.cloudflareApiToken || process.env.CLOUDFLARE_API_TOKEN || '',
         model: cfModel || '@cf/meta/llama-3.1-8b-instruct',
       })
       if (!(await (ai as CloudflareAI).ok())) {
@@ -114,13 +128,13 @@ const runChat = async (model: string | undefined, opts: { url: string; smallMode
       console.log(chalk.dim(`Model: ${(ai as CloudflareAI).model}`))
       await startInteractiveCloudChat(ai as CloudflareAI, 'Cloudflare Workers AI')
       return
-    } else if (opts.openai) {
+    } else if (activeProvider === 'openai') {
       // OpenAI via Cloudflare Gateway mode
-      const openaiModel = opts.openai
+      const openaiModel = opts.openai || activeModel
       console.log(chalk.cyan('🔗 Using OpenAI via Cloudflare Gateway'))
       ai = new OpenAIGateway({
-        accountId: process.env.CLOUDFLARE_ACCOUNT_ID || '',
-        apiToken: process.env.CLOUDFLARE_API_TOKEN || '',
+        accountId: savedSettings.cloudflareAccountId || process.env.CLOUDFLARE_ACCOUNT_ID || '',
+        apiToken: savedSettings.cloudflareApiToken || process.env.CLOUDFLARE_API_TOKEN || '',
         model: openaiModel || 'openai/gpt-5.4-nano',
       })
       if (!(await (ai as OpenAIGateway).ok())) {
@@ -149,8 +163,8 @@ const runChat = async (model: string | undefined, opts: { url: string; smallMode
       console.log(chalk.cyan(`🌐 Connecting to server: ${serverUrl}`))
 
       // Use remote Ollama via server
-      const o = new Ollama(m, `${serverUrl}`)
-      const coord = new SessionCoordinator(process.cwd(), m)
+      const o = new Ollama(activeModel, `${serverUrl}`)
+      const coord = new SessionCoordinator(process.cwd(), activeModel)
       const frustration = new FrustrationDetector()
 
       // Test connection
@@ -233,9 +247,9 @@ Always use [tool: args] bracket format - never use markdown code blocks!`
       return
     } else {
     // Initialize Ollama for local mode
-    const o = new Ollama(m, opts.url)
-    const c = new ContextService(m)
-    const coord = new SessionCoordinator(process.cwd(), m)
+      const o = new Ollama(activeModel, activeProvider === 'ollama' ? savedSettings.url || opts.url : opts.url)
+      const c = new ContextService(activeModel)
+      const coord = new SessionCoordinator(process.cwd(), activeModel)
     const frustration = new FrustrationDetector()
     const undercover = new UncoverMode()
     const memory = new MemorySystem()
@@ -262,7 +276,7 @@ Always use [tool: args] bracket format - never use markdown code blocks!`
     })
 
     // Initialize SmallModelCorrector if flag is set
-    const corrector = opts.smallModelMode
+      const corrector = opts.smallModelMode
       ? new SmallModelCorrectorSystem(o, {
           maxIterations: 3,
           temperature: 0.3,
