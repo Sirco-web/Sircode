@@ -1242,7 +1242,3 @@ sircode exec "wf2: https://docs.example.com, Extract API examples"
 ```
 [ask: Your question here?]
 ```
-
----
-
-**Happy coding! 🚀**
