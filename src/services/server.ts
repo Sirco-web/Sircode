@@ -7,6 +7,7 @@
 import express from 'express'
 import * as http from 'http'
 import * as os from 'os'
+import chalk from 'chalk'
 import { Ollama } from './ollama.js'
 import { GPUDetector } from './gpuDetector.js'
 import { OllamaSetup } from './ollamaSetup.js'
