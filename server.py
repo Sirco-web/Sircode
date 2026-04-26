@@ -218,17 +218,53 @@ def setup_sircode():
     sircode_dir = Path.home() / '.sircode'
     sircode_dir.mkdir(exist_ok=True, parents=True)
     
-    # Copy build files if this is a fresh install
-    sircode_repo = Path(__file__).parent
-    if (sircode_repo / 'dist').exists():
+    # Find the Sircode source directory
+    # Check multiple possible locations:
+    # 1. Current script's directory (when running from source)
+    # 2. ~/.local/share/sircode (default install location)
+    # 3. SIRCODE_INSTALL_DIR environment variable
+    script_dir = Path(__file__).parent.resolve()
+    
+    # Check if we're in the source tree (has dist folder)
+    if (script_dir / 'dist').exists():
+        sircode_repo = script_dir
+    elif os.environ.get('SIRCODE_INSTALL_DIR'):
+        sircode_repo = Path(os.environ['SIRCODE_INSTALL_DIR'])
+    else:
+        # Default install location
+        sircode_repo = Path.home() / '.local' / 'share' / 'sircode'
+    
+    # If source exists, ensure it's set up
+    if sircode_repo.exists() and (sircode_repo / 'dist').exists():
         print("📦 Setting up Sircode...")
         subprocess.run(['npm', 'install'], cwd=sircode_repo, check=False)
         subprocess.run(['npm', 'run', 'build'], cwd=sircode_repo, check=False)
+    
+    return sircode_repo
 
 
 def start_server(port=8093, host='0.0.0.0', verbose=False):
     """Start the Sircode server"""
-    sircode_repo = Path(__file__).parent
+    # Find Sircode source directory
+    script_dir = Path(__file__).parent.resolve()
+    
+    # Check multiple possible locations
+    if (script_dir / 'dist').exists():
+        sircode_repo = script_dir
+    elif os.environ.get('SIRCODE_INSTALL_DIR'):
+        sircode_repo = Path(os.environ['SIRCODE_INSTALL_DIR'])
+    else:
+        sircode_repo = Path.home() / '.local' / 'share' / 'sircode'
+    
+    # Verify the source exists
+    if not sircode_repo.exists():
+        print(f"❌ Sircode not found at {sircode_repo}")
+        print("   Please install Sircode first: curl -sSL https://raw.githubusercontent.com/Sirco-web/Sircode/main/install.sh | bash")
+        sys.exit(1)
+    
+    if not (sircode_repo / 'dist').exists():
+        print(f"❌ Sircode not built. Run: cd {sircode_repo} && npm run build")
+        sys.exit(1)
     
     # Install GPU dependencies first
     gpu_info = install_gpu_dependencies()

@@ -18,9 +18,22 @@ BIN_DIR="$HOME/.local/bin"
 mkdir -p "$BIN_DIR"
 
 echo "🔗 Creating sircode command in $BIN_DIR..."
-cat > "$BIN_DIR/sircode" << EOF
+cat > "$BIN_DIR/sircode" << 'EOF'
 #!/bin/bash
-exec node "$SIRCODE_DIR/dist/cli.js" "\$@"
+# Get the directory where sircode is installed
+SIRCODE_DIR="$(dirname "$(readlink -f "$0")")"
+
+# Check if the command is a subcommand that needs special handling
+if [ "$1" = "server" ]; then
+    # For server command, use Python launcher
+    exec python3 "$SIRCODE_DIR/server.py" "${@:2}"
+elif [ "$1" = "chat" ] && [[ "$*" == *"--server"* ]]; then
+    # Chat with --server flag - pass through to Node
+    exec node "$SIRCODE_DIR/dist/cli.js" "$@"
+else
+    # Default: use Node CLI
+    exec node "$SIRCODE_DIR/dist/cli.js" "$@"
+fi
 EOF
 chmod +x "$BIN_DIR/sircode"
 
