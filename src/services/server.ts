@@ -86,12 +86,58 @@ export class SircodeServer {
 
   private async probeBackend(): Promise<void> {
     const base = this.getOllamaBaseUrl()
+    let pickedModel: string | undefined
+    let tagsStatus: number | undefined
+    let v1ModelsStatus: number | undefined
+
+    // Prefer discovering an actually-installed model so POST probes don't return 404 for "model not found".
+    try {
+      const tags = await fetch(`${base}/api/tags`)
+      tagsStatus = tags.status
+      if (tags.ok) {
+        const d = (await tags.json()) as { models?: Array<{ name?: string }> }
+        const name = d.models?.find(m => typeof m.name === 'string' && m.name.length > 0)?.name
+        if (name) pickedModel = name
+      }
+    } catch {
+      // ignore
+    }
+
+    if (!pickedModel) {
+      try {
+        const v1 = await fetch(`${base}/v1/models`)
+        v1ModelsStatus = v1.status
+        if (v1.ok) {
+          const d = (await v1.json()) as { data?: Array<{ id?: string }> }
+          const id = d.data?.find(m => typeof m.id === 'string' && m.id.length > 0)?.id
+          if (id) pickedModel = id
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     const probes: Array<{ label: string; method: 'GET' | 'POST'; path: string; body?: unknown }> = [
       { label: 'ollama tags', method: 'GET', path: '/api/tags' },
       { label: 'openai models', method: 'GET', path: '/v1/models' },
-      { label: 'ollama chat', method: 'POST', path: '/api/chat', body: { model: 'probe', messages: [], stream: false } },
-      { label: 'ollama generate', method: 'POST', path: '/api/generate', body: { model: 'probe', prompt: 'hi', stream: false } },
-      { label: 'openai chat', method: 'POST', path: '/v1/chat/completions', body: { model: 'probe', messages: [], stream: false } },
+      {
+        label: 'ollama chat',
+        method: 'POST',
+        path: '/api/chat',
+        body: { model: pickedModel ?? 'probe', messages: [{ role: 'user', content: 'ping' }], stream: false },
+      },
+      {
+        label: 'ollama generate',
+        method: 'POST',
+        path: '/api/generate',
+        body: { model: pickedModel ?? 'probe', prompt: 'ping', stream: false },
+      },
+      {
+        label: 'openai chat',
+        method: 'POST',
+        path: '/v1/chat/completions',
+        body: { model: pickedModel ?? 'probe', messages: [{ role: 'user', content: 'ping' }], stream: false },
+      },
     ]
 
     const results: string[] = []
@@ -109,6 +155,11 @@ export class SircodeServer {
     }
 
     console.log(`🔎 Backend: ${base}`)
+    if (pickedModel) {
+      console.log(`🔎 Probe model: ${pickedModel}`)
+    } else {
+      console.log(`⚠️  Probe model: not found (POST probes may 404 even if routes exist)`)
+    }
     console.log(`🔎 Probes: ${results.join(' | ')}`)
     const all404 = results.every(r => r.includes(': 404'))
     if (all404) {
