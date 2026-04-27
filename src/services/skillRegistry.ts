@@ -71,7 +71,7 @@ export class SkillRegistry {
         description: 'Fetch and analyze web page content',
         category: 'knowledge',
         enabled: true,
-        tools: ['wf2'],
+        tools: ['url'],
       },
       {
         name: 'knowledge-base',

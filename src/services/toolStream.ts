@@ -62,6 +62,7 @@ export class ToolStreamExecutor {
   /**
    * Parse tool from text like "bash: echo hello" or "wf: index.html, <html>...</html>"
    * Handles multi-line content with proper comma-based argument splitting
+   * Supports both short names (wf, fe, etc.) and long names (write, replace, etc.)
    */
   private parseTool(toolText: string): { tool: string; args: string[] } | null {
     const trimmed = toolText.trim()
@@ -69,14 +70,42 @@ export class ToolStreamExecutor {
     
     if (colonIdx === -1) return null
 
-    const tool = trimmed.substring(0, colonIdx).trim()
+    let tool = trimmed.substring(0, colonIdx).trim()
     const content = trimmed.substring(colonIdx + 1).trim()
 
     // Validate tool name
     if (!/^[a-z0-9_]+$/.test(tool)) return null
+    
+    // Normalize tool name (map long names to short names for internal use)
+    const toolMap: Record<string, string> = {
+      'write': 'wf',
+      'read': 'rf',
+      'read_lines': 'fr',
+      'append': 'add',
+      'replace': 'fe',
+      'list': 'ls',
+      'mkd': 'mkdir',
+      'rm': 'rmf',
+      'sh': 'bash',
+      'exec': 'bash',
+      'fetch': 'url',
+      'search': 'ws',
+      'question': 'ask',
+      'task_new': 'tc',
+      'tasks': 'tl',
+      'task_set': 'tu',
+      'task_done': 'tc2',
+      'tasks_clear': 'tr',
+      'kb': 'kn',
+      'know': 'kn',
+    }
+    
+    if (toolMap[tool]) {
+      tool = toolMap[tool]
+    }
 
     // Parse arguments based on tool type
-    if (['wf', 'add'].includes(tool)) {
+    if (['wf', 'add', 'write', 'append'].includes(tool)) {
       // Format: wf: filepath, content
       const commaIdx = content.indexOf(',')
       if (commaIdx > 0) {
@@ -88,7 +117,7 @@ export class ToolStreamExecutor {
         }
       }
       return null
-    } else if (['fe', 'rep'].includes(tool)) {
+    } else if (['fe', 'rep', 'replace'].includes(tool)) {
       // Format: fe: filepath, oldtext, newtext
       // Find first two commas carefully (old and new might have commas)
       const firstComma = content.indexOf(',')
@@ -108,20 +137,20 @@ export class ToolStreamExecutor {
         tool,
         args: [filepath, oldText, newText]
       }
-    } else if (tool === 'bash') {
+    } else if (['bash', 'sh', 'exec'].includes(tool)) {
       // bash: command (no argument parsing needed)
       return {
-        tool,
+        tool: 'bash',
         args: [content]
       }
-    } else if (['rf', 'fr'].includes(tool)) {
+    } else if (['rf', 'fr', 'read', 'read_lines'].includes(tool)) {
       // rf: filepath [offset] [limit]
       const args = content.split(',').map(a => a.trim()).filter(a => a)
       return args.length > 0 ? {
         tool,
         args
       } : null
-    } else if (['ws', 'wf2'].includes(tool)) {
+    } else if (['ws', 'url', 'fetch', 'search'].includes(tool)) {
       // ws: search query [maxresults]
       const args = content.split(',').map(a => a.trim()).filter(a => a)
       return args.length > 0 ? {
@@ -137,22 +166,33 @@ export class ToolStreamExecutor {
 
   /**
    * Execute a tool immediately with live output
+   * BLOCKING TOOLS: url, fetch, ask, question (system waits for result)
    */
   async executeTool(call: ToolCall): Promise<string> {
     try {
-      // Show executing indicator
-      console.log(chalk.dim(`  → ${call.tool} ${call.args[0] || ''}`))
+      // Determine if this is a blocking tool
+      const isBlocking = ['url', 'fetch', 'ask', 'question'].includes(call.tool)
       
+      // Show executing indicator with blocking note
+      const blockingNote = isBlocking ? ' [BLOCKING - waiting for result]' : ''
+      console.log(chalk.dim(`  → ${call.tool} ${call.args[0] || ''}${blockingNote}`))
+      
+      // Execute the tool (potentially blocking)
       const res = await Promise.resolve(runTool(call.tool, ...call.args))
       const output = this.fmt.res(call.tool, res)
+      
+      // Show blocking completion if it was blocking
+      if (isBlocking) {
+        console.log(chalk.cyan(`  ✓ ${call.tool} complete`))
+      }
       
       // Record in session
       if (this.sessionCoord) {
         this.sessionCoord.recordTool(call.tool, res)
-        if (call.tool === 'wf' || call.tool === 'fe') {
+        if (call.tool === 'wf' || call.tool === 'fe' || call.tool === 'write' || call.tool === 'replace') {
           this.sessionCoord.recordFileOp('create', call.args[0])
         }
-        if (call.tool === 'rep' || call.tool === 'add') {
+        if (call.tool === 'rep' || call.tool === 'add' || call.tool === 'append') {
           this.sessionCoord.recordFileOp('modify', call.args[0])
         }
       }

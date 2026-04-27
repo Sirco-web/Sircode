@@ -359,9 +359,9 @@ When chatting with the AI, it can use **18+ tools** to accomplish tasks:
   - Example: `[fr: package.json, 5, 10]` (read lines 5-15)
 
 ### 🌐 Web Tools (2)
-- **wf2** (web_fetch) - Fetch and extract content from URLs
-  - Format: `[wf2: url, prompt?]`
-  - Example: `[wf2: https://docs.example.com, Extract API endpoint examples]`
+- **url** (url_fetch) - Fetch and extract content from URLs
+  - Format: `[url: url, prompt?]`
+  - Example: `[url: https://docs.example.com, Extract API endpoint examples]`
 - **ws** (web_search) - Search the web for information
   - Format: `[ws: query, max_results?]`
   - Example: `[ws: typescript performance tips, 5]`
@@ -845,7 +845,7 @@ sircode server --help
    │          Tool Execution Engine           │
    │          (src/tools/index.ts)            │
    │  ┌────────────────────────────────────┐  │
-   │  │ bash|rf|fe|wf|git|ws|wf2|ask|tasks│  │
+   │  │ bash|rf|fe|wf|git|ws|url|ask|tasks│  │
    │  └────────────────────────────────────┘  │
    └──────────────────────────────────────────┘
 ```
@@ -1209,9 +1209,9 @@ sircode exec "git: add . && git commit -m 'Initial commit'"
 sircode exec "ws: TypeScript best practices, 5"
 ```
 
-**wf2 (web_fetch)** - Extract URL content
+**url (url_fetch)** - Extract URL content
 ```bash
-sircode exec "wf2: https://docs.example.com, Extract API examples"
+sircode exec "url: https://docs.example.com, Extract API examples"
 ```
 
 ### Task Management

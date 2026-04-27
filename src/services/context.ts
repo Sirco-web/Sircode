@@ -31,7 +31,7 @@ TOOLS (19 total - use IMMEDIATELY when needed):
 [git: cmd] - Git operations
 [fe: file, old, new] - Edit file (multi-line)
 [fr: file, line?, len?] - Read file with line numbers
-[wf2: url] - Fetch URL content
+[url: url] - Fetch URL content
 [ws: query] - Web search
 [tc: title, desc?] - Task create
 [tl:] - Task list

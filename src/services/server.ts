@@ -11,6 +11,7 @@ import chalk from 'chalk'
 import { Ollama } from './ollama.js'
 import { GPUDetector } from './gpuDetector.js'
 import { OllamaSetup } from './ollamaSetup.js'
+import { SystemPromptFactory } from './systemPromptFactory.js'
 import type { Opts } from '../types/index.js'
 
 export interface ServerConfig {
@@ -204,17 +205,7 @@ export class SircodeServer {
    * Setup API routes
    */
   private setupRoutes(): void {
-    const TOOL_SYSTEM_PROMPT =
-      `You are Sircode - an autonomous coding assistant.\n\n` +
-      `CRITICAL: Tool Format Requirement ⚠️\n` +
-      `Tools MUST use BRACKET FORMAT: [tool: args]\n` +
-      `NOT markdown code blocks - those are IGNORED!\n\n` +
-      `✅ CORRECT: [wf: file.html, <!DOCTYPE html>...]\n` +
-      `❌ WRONG:  \`\`\`bash\\nwf: file.html, content\\n\`\`\`\n\n` +
-      `Bracket Format = Files Created ✓\n` +
-      `Markdown Code Blocks = Ignored ✗\n\n` +
-      `Available tools: wf (write), fe (edit), fr (read), bash (execute), ws (search), wf2 (fetch)\n` +
-      `Always use [tool: args] bracket format - never use markdown code blocks!`
+    const TOOL_SYSTEM_PROMPT = SystemPromptFactory.generateChatSystemPrompt()
 
     /**
      * Health check

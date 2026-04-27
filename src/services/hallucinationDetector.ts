@@ -92,7 +92,7 @@ export class HallucinationDetector {
     // Suggest tools for grounding
     const suggestedTools =
       severity === 'high' || severity === 'critical'
-        ? ['ws', 'wf2', 'fr'] // web search, fetch, read file
+        ? ['ws', 'url', 'fr'] // web search, fetch, read file
         : []
 
     return {

@@ -23,6 +23,7 @@ import { Agent } from './services/agent.js'
 import { SmallModelCorrectorSystem } from './services/smallModelCorrector.js'
 import { SircodeServer } from './services/server.js'
 import { GPUDetector } from './services/gpuDetector.js'
+import { SystemPromptFactory } from './services/systemPromptFactory.js'
 
 const ex = promisify(exec)
 
@@ -284,20 +285,7 @@ const runChat = async (model: string | undefined, opts: { url: string; smallMode
         console.log(chalk.dim(`\nSession saved to .code/`))
       })
 
-      const SERVER_TOOL_SYSTEM = `You are Sircode - an autonomous coding assistant.
-
-CRITICAL: Tool Format Requirement ⚠️
-Tools MUST use BRACKET FORMAT: [tool: args]
-NOT markdown code blocks - those are IGNORED!
-
-✅ CORRECT: [wf: file.html, <!DOCTYPE html>...]
-❌ WRONG:  \`\`\`bash\\nwf: file.html, content\\n\`\`\`
-
-Bracket Format = Files Created ✓
-Markdown Code Blocks = Ignored ✗
-
-Available tools: wf (write), fe (edit), fr (read), bash (execute), ws (search), wf2 (fetch)
-Always use [tool: args] bracket format - never use markdown code blocks!`
+      const SERVER_TOOL_SYSTEM = SystemPromptFactory.generateChatSystemPrompt()
 
       /** Ollama: no cap on new tokens, large context (passed through to server → Ollama) */
       const serverGenOpts = { predict: -1, num_ctx: 131072 }
@@ -403,6 +391,7 @@ Always use [tool: args] bracket format - never use markdown code blocks!`
     // Initialize Ollama for local mode
       const o = new Ollama(activeModel, activeProvider === 'ollama' ? savedSettings.url || opts.url : opts.url)
       const c = new ContextService(activeModel)
+      c.setSys(SystemPromptFactory.generateChatSystemPrompt())
       const coord = new SessionCoordinator(process.cwd(), activeModel)
     const frustration = new FrustrationDetector()
     const undercover = new UncoverMode()
