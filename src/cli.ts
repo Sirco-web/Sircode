@@ -191,6 +191,43 @@ const runChat = async (model: string | undefined, opts: { url: string; smallMode
 
       console.log(chalk.green('✓ Connected'))
       console.log(chalk.dim(`Server: ${serverUrl}`))
+
+      // Show server metadata (best-effort)
+      try {
+        const [infoRes, healthRes] = await Promise.all([
+          fetch(`${serverUrl}/info`).catch(() => null),
+          fetch(`${serverUrl}/health`).catch(() => null),
+        ])
+
+        if (infoRes?.ok) {
+          const info = (await infoRes.json()) as {
+            name?: string
+            version?: string
+            platform?: string
+            arch?: string
+            hostname?: string
+            gpu?: unknown
+          }
+          if (info.name || info.version) {
+            console.log(chalk.dim(`Info: ${info.name ?? 'Server'} ${info.version ?? ''}`.trim()))
+          }
+          if (info.platform || info.arch) {
+            console.log(chalk.dim(`Host: ${info.hostname ?? ''} ${info.platform ?? ''} ${info.arch ?? ''}`.trim()))
+          }
+          if (info.gpu) {
+            console.log(chalk.dim(`GPU: ${typeof info.gpu === 'string' ? info.gpu : JSON.stringify(info.gpu)}`))
+          }
+        }
+
+        if (healthRes?.ok) {
+          const health = (await healthRes.json()) as { gpu?: unknown }
+          if (health.gpu) {
+            console.log(chalk.dim(`Mode: ${typeof health.gpu === 'string' ? health.gpu : JSON.stringify(health.gpu)}`))
+          }
+        }
+      } catch {
+        // ignore
+      }
       console.log()
 
       // Check if model exists, pull if needed

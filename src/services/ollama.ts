@@ -13,7 +13,42 @@ export class Ollama {
     // Sircode Server runs on 8093 or other ports, never 11434
     // Standard Ollama runs on 11434
     const urlObj = new URL(this.url)
-    this.isSircodeServer = urlObj.port !== '11434' && !urlObj.hostname.includes('localhost:11434')
+    this.isSircodeServer = Boolean(urlObj.port) && urlObj.port !== '11434'
+  }
+
+  private chatEndpoints(): [primary: string, fallback: string] {
+    return this.isSircodeServer ? ['/chat', '/api/chat'] : ['/api/chat', '/chat']
+  }
+
+  private pullEndpoints(): [primary: string, fallback: string] {
+    return this.isSircodeServer ? ['/models/pull', '/api/pull'] : ['/api/pull', '/models/pull']
+  }
+
+  private buildPrompt(msgs: Msg[]): string {
+    // Basic chat-to-prompt adapter for older Ollama versions that lack /api/chat.
+    // Keeps formatting simple and deterministic.
+    const parts: string[] = []
+    for (const m of msgs) {
+      if (!m?.content) continue
+      if (m.role === 'system') parts.push(`System: ${m.content}`)
+      else if (m.role === 'user') parts.push(`User: ${m.content}`)
+      else parts.push(`Assistant: ${m.content}`)
+    }
+    parts.push('Assistant:')
+    return parts.join('\n\n')
+  }
+
+  private async tryPostJson(
+    endpoint: string,
+    body: unknown,
+    signal?: AbortSignal,
+  ): Promise<Response> {
+    return await fetch(`${this.url}${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    })
   }
 
   async ok(): Promise<boolean> {
@@ -21,10 +56,25 @@ export class Ollama {
       const ctrl = new AbortController()
       const timeout = setTimeout(() => ctrl.abort(), 5000)
       
-      const endpoint = this.isSircodeServer ? '/health' : '/api/tags'
-      const res = await fetch(`${this.url}${endpoint}`, { signal: ctrl.signal })
+      const endpoints = this.isSircodeServer ? ['/health', '/api/tags'] : ['/api/tags', '/health']
+      let res: Response | undefined
+      let okEndpoint: string | undefined
+      for (const endpoint of endpoints) {
+        try {
+          res = await fetch(`${this.url}${endpoint}`, { signal: ctrl.signal })
+          if (res.ok) {
+            okEndpoint = endpoint
+            break
+          }
+        } catch {
+          // try next
+        }
+      }
       
       clearTimeout(timeout)
+      if (!res) return false
+      if (res.ok && okEndpoint === '/health') this.isSircodeServer = true
+      if (res.ok && okEndpoint === '/api/tags') this.isSircodeServer = false
       return res.ok
     } catch (e) {
       return false
@@ -33,15 +83,45 @@ export class Ollama {
 
   async ls(): Promise<string[]> {
     try {
-      if (this.isSircodeServer) {
-        // Sircode Server /models endpoint
-        const d = (await (await fetch(`${this.url}/models`)).json()) as { models?: string[] }
-        return d.models ?? []
-      } else {
-        // Ollama /api/tags endpoint
-        const d = (await (await fetch(`${this.url}/api/tags`)).json()) as { models?: Array<{ name: string }> }
+      // Prefer whichever API matches the server, but fall back gracefully.
+      const endpoints = this.isSircodeServer ? ['/models', '/api/tags'] : ['/api/tags', '/models']
+
+      // Sircode Server /models endpoint
+      if (endpoints[0] === '/models') {
+        const r = await fetch(`${this.url}/models`)
+        if (r.ok) {
+          this.isSircodeServer = true
+          const d = (await r.json()) as { models?: string[] }
+          return d.models ?? []
+        }
+      }
+
+      // Ollama /api/tags endpoint
+      const r = await fetch(`${this.url}/api/tags`)
+      if (r.ok) {
+        this.isSircodeServer = false
+        const d = (await r.json()) as { models?: Array<{ name: string }> }
         return (d.models ?? []).map(m => m.name)
       }
+
+      // Last attempt: the endpoint we didn't try first (in case first failed non-404)
+      if (endpoints[0] === '/api/tags') {
+        const r2 = await fetch(`${this.url}/models`)
+        if (r2.ok) {
+          this.isSircodeServer = true
+          const d = (await r2.json()) as { models?: string[] }
+          return d.models ?? []
+        }
+      } else {
+        const r2 = await fetch(`${this.url}/api/tags`)
+        if (r2.ok) {
+          this.isSircodeServer = false
+          const d = (await r2.json()) as { models?: Array<{ name: string }> }
+          return (d.models ?? []).map(m => m.name)
+        }
+      }
+
+      return []
     } catch {
       return []
     }
@@ -52,7 +132,6 @@ export class Ollama {
     const timeout = setTimeout(() => ctrl.abort(), 600000) // 10 min timeout for CPU models
     
     try {
-      const endpoint = this.isSircodeServer ? '/chat' : '/api/chat'
       const body = {
         model: this.model,
         messages: msgs,
@@ -60,19 +139,35 @@ export class Ollama {
         ...(this.isSircodeServer ? {} : { keep_alive: '10m' }),
       }
 
-      const r = await fetch(`${this.url}${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: ctrl.signal,
-      })
+      const [primary, fallback] = this.chatEndpoints()
+      let r = await this.tryPostJson(primary, body, ctrl.signal)
+      if (r.status === 404 || r.status === 405) {
+        r = await this.tryPostJson(fallback, body, ctrl.signal)
+        if (r.ok) this.isSircodeServer = fallback === '/chat'
+      }
+
+      // Older Ollama versions may not support /api/chat. Fall back to /api/generate.
+      if (!this.isSircodeServer && r.status === 404) {
+        const gen = {
+          model: this.model,
+          prompt: this.buildPrompt(msgs),
+          stream: false,
+          keep_alive: '10m',
+          options: opts,
+        }
+        r = await this.tryPostJson('/api/generate', gen, ctrl.signal)
+      }
       clearTimeout(timeout)
       
-      if (!r.ok) throw new Error(`${this.isSircodeServer ? 'Sircode Server' : 'Ollama'}: ${r.status}`)
+      if (!r.ok) {
+        throw new Error(
+          `${this.isSircodeServer ? 'Sircode Server' : 'Ollama'}: ${r.status} (${r.url})`,
+        )
+      }
       const data = await r.json()
       
       // Handle both response formats
-      const content = this.isSircodeServer ? data.content : data.message?.content
+      const content = this.isSircodeServer ? data.content : (data.message?.content ?? data.response)
       if (!content) throw new Error('No response from model')
       return content
     } catch (e) {
@@ -89,7 +184,6 @@ export class Ollama {
     const timeout = setTimeout(() => ctrl.abort(), 600000) // 10 min timeout
     
     try {
-      const endpoint = this.isSircodeServer ? '/chat' : '/api/chat'
       const body = {
         model: this.model,
         messages: msgs,
@@ -97,15 +191,33 @@ export class Ollama {
         ...(this.isSircodeServer ? {} : { keep_alive: '10m' }),
       }
 
-      const r = await fetch(`${this.url}${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: ctrl.signal,
-      })
+      const [primary, fallback] = this.chatEndpoints()
+      let r = await this.tryPostJson(primary, body, ctrl.signal)
+      if (r.status === 404 || r.status === 405) {
+        r = await this.tryPostJson(fallback, body, ctrl.signal)
+        if (r.ok) this.isSircodeServer = fallback === '/chat'
+      }
+
+      // Older Ollama: if /api/chat doesn't exist, stream from /api/generate instead.
+      let isGenerateStream = false
+      if (!this.isSircodeServer && r.status === 404) {
+        const gen = {
+          model: this.model,
+          prompt: this.buildPrompt(msgs),
+          stream: true,
+          keep_alive: '10m',
+          options: opts,
+        }
+        r = await this.tryPostJson('/api/generate', gen, ctrl.signal)
+        isGenerateStream = true
+      }
       clearTimeout(timeout)
       
-      if (!r.ok) throw new Error(`${this.isSircodeServer ? 'Sircode Server' : 'Ollama'}: ${r.status}`)
+      if (!r.ok) {
+        throw new Error(
+          `${this.isSircodeServer ? 'Sircode Server' : 'Ollama'}: ${r.status} (${r.url})`,
+        )
+      }
       const reader = r.body?.getReader()
       if (!reader) return
       
@@ -139,12 +251,16 @@ export class Ollama {
           }
           buf = lines[lines.length - 1]
         } else {
-          // Ollama uses newline-delimited JSON
+          // Ollama uses newline-delimited JSON (both /api/chat and /api/generate)
           const lines = buf.split('\n')
           for (let i = 0; i < lines.length - 1; i++) {
             try {
-              const d = JSON.parse(lines[i]!) as OllamaRes
-              if (d.message?.content) yield d.message.content
+              const d = JSON.parse(lines[i]!) as OllamaRes & { response?: string }
+              if (!isGenerateStream) {
+                if (d.message?.content) yield d.message.content
+              } else {
+                if (d.response) yield d.response
+              }
             } catch {}
           }
           buf = lines[lines.length - 1]!
@@ -160,29 +276,8 @@ export class Ollama {
   }
 
   async *stream(msgs: Msg[], opts?: Opts): AsyncGenerator<string> {
-    const r = await fetch(`${this.url}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: this.model, messages: msgs, stream: true, options: opts }),
-    })
-    if (!r.ok) throw new Error(`Ollama: ${r.status}`)
-    const reader = r.body?.getReader()
-    if (!reader) return
-    const dec = new TextDecoder()
-    let buf = ''
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buf += dec.decode(value, { stream: true })
-      const lines = buf.split('\n')
-      for (let i = 0; i < lines.length - 1; i++) {
-        try {
-          const d = JSON.parse(lines[i]!) as OllamaRes
-          if (d.message?.content) yield d.message.content
-        } catch {}
-      }
-      buf = lines[lines.length - 1]!
-    }
+    // Back-compat alias used by some callers: route to the robust implementation.
+    yield* this.streamChat(msgs, opts)
   }
 
   /**
@@ -190,17 +285,18 @@ export class Ollama {
    */
   async pull(model: string): Promise<void> {
     try {
-      const endpoint = this.isSircodeServer ? '/models/pull' : '/api/pull'
-      const body = this.isSircodeServer ? { model } : { name: model, stream: false }
+      const [primary, fallback] = this.pullEndpoints()
+      const bodyPrimary = primary === '/models/pull' ? { model } : { name: model, stream: false }
+      const bodyFallback = fallback === '/models/pull' ? { model } : { name: model, stream: false }
 
-      const r = await fetch(`${this.url}${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
+      let r = await this.tryPostJson(primary, bodyPrimary)
+      if (r.status === 404 || r.status === 405) {
+        r = await this.tryPostJson(fallback, bodyFallback)
+        if (r.ok) this.isSircodeServer = fallback === '/models/pull'
+      }
 
       if (!r.ok) {
-        throw new Error(`Failed to pull model ${model}: ${r.status} ${r.statusText}`)
+        throw new Error(`Failed to pull model ${model}: ${r.status} ${r.statusText} (${r.url})`)
       }
 
       if (this.isSircodeServer) {
@@ -228,14 +324,18 @@ export class Ollama {
    */
   async *streamPull(model: string): AsyncGenerator<string> {
     try {
-      const r = await fetch(`${this.url}/api/pull`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: model, stream: true }),
-      })
+      const [primary, fallback] = this.pullEndpoints()
+      const bodyPrimary = primary === '/models/pull' ? { model } : { name: model, stream: true }
+      const bodyFallback = fallback === '/models/pull' ? { model } : { name: model, stream: true }
+
+      let r = await this.tryPostJson(primary, bodyPrimary)
+      if (r.status === 404) {
+        r = await this.tryPostJson(fallback, bodyFallback)
+        if (r.ok) this.isSircodeServer = fallback === '/models/pull'
+      }
 
       if (!r.ok) {
-        throw new Error(`Failed to pull model ${model}: ${r.status}`)
+        throw new Error(`Failed to pull model ${model}: ${r.status} (${r.url})`)
       }
 
       const reader = r.body?.getReader()
