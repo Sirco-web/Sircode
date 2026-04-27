@@ -244,6 +244,9 @@ export class SircodeServer {
         // Ensure model is available
         await this.ensureModel(model)
 
+        // IMPORTANT: route inference to the requested model
+        this.ollama.set(model)
+
         // Cast messages to proper type
         const msgs = (messages as Array<{ role: string; content: string }>) ?? []
 
