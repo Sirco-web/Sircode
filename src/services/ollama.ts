@@ -3,20 +3,45 @@ import type { Msg, OllamaRes, Opts } from '../types/index.js'
 export class Ollama {
   url: string
   model: string
+  isSircodeServer: boolean
 
   constructor(model = 'mistral', url = 'http://localhost:11434') {
     this.model = model
-    this.url = url
+    this.url = url.replace(/\/$/, '') // Remove trailing slash
+    
+    // Detect if this is a Sircode Server (not standard Ollama)
+    // Sircode Server runs on 8093 or other ports, never 11434
+    // Standard Ollama runs on 11434
+    const urlObj = new URL(this.url)
+    this.isSircodeServer = urlObj.port !== '11434' && !urlObj.hostname.includes('localhost:11434')
   }
 
   async ok(): Promise<boolean> {
-    try { return (await fetch(`${this.url}/api/tags`)).ok } catch { return false }
+    try {
+      const ctrl = new AbortController()
+      const timeout = setTimeout(() => ctrl.abort(), 5000)
+      
+      const endpoint = this.isSircodeServer ? '/health' : '/api/tags'
+      const res = await fetch(`${this.url}${endpoint}`, { signal: ctrl.signal })
+      
+      clearTimeout(timeout)
+      return res.ok
+    } catch (e) {
+      return false
+    }
   }
 
   async ls(): Promise<string[]> {
     try {
-      const d = (await (await fetch(`${this.url}/api/tags`)).json()) as { models?: Array<{ name: string }> }
-      return (d.models ?? []).map(m => m.name)
+      if (this.isSircodeServer) {
+        // Sircode Server /models endpoint
+        const d = (await (await fetch(`${this.url}/models`)).json()) as { models?: string[] }
+        return d.models ?? []
+      } else {
+        // Ollama /api/tags endpoint
+        const d = (await (await fetch(`${this.url}/api/tags`)).json()) as { models?: Array<{ name: string }> }
+        return (d.models ?? []).map(m => m.name)
+      }
     } catch {
       return []
     }
@@ -27,23 +52,29 @@ export class Ollama {
     const timeout = setTimeout(() => ctrl.abort(), 600000) // 10 min timeout for CPU models
     
     try {
-      const r = await fetch(`${this.url}/api/chat`, {
+      const endpoint = this.isSircodeServer ? '/chat' : '/api/chat'
+      const body = {
+        model: this.model,
+        messages: msgs,
+        stream: false,
+        ...(this.isSircodeServer ? {} : { keep_alive: '10m' }),
+      }
+
+      const r = await fetch(`${this.url}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: this.model,
-          messages: msgs,
-          stream: false,
-          keep_alive: '10m',
-        }),
+        body: JSON.stringify(body),
         signal: ctrl.signal,
       })
       clearTimeout(timeout)
       
-      if (!r.ok) throw new Error(`Ollama: ${r.status}`)
-      const data = (await r.json()) as OllamaRes
-      if (!data.message?.content) throw new Error('No response from model')
-      return data.message.content
+      if (!r.ok) throw new Error(`${this.isSircodeServer ? 'Sircode Server' : 'Ollama'}: ${r.status}`)
+      const data = await r.json()
+      
+      // Handle both response formats
+      const content = this.isSircodeServer ? data.content : data.message?.content
+      if (!content) throw new Error('No response from model')
+      return content
     } catch (e) {
       clearTimeout(timeout)
       if (e instanceof Error && e.name === 'AbortError') {
@@ -58,20 +89,23 @@ export class Ollama {
     const timeout = setTimeout(() => ctrl.abort(), 600000) // 10 min timeout
     
     try {
-      const r = await fetch(`${this.url}/api/chat`, {
+      const endpoint = this.isSircodeServer ? '/chat' : '/api/chat'
+      const body = {
+        model: this.model,
+        messages: msgs,
+        stream: true,
+        ...(this.isSircodeServer ? {} : { keep_alive: '10m' }),
+      }
+
+      const r = await fetch(`${this.url}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: this.model,
-          messages: msgs,
-          stream: true,
-          keep_alive: '10m',
-        }),
+        body: JSON.stringify(body),
         signal: ctrl.signal,
       })
       clearTimeout(timeout)
       
-      if (!r.ok) throw new Error(`Ollama: ${r.status}`)
+      if (!r.ok) throw new Error(`${this.isSircodeServer ? 'Sircode Server' : 'Ollama'}: ${r.status}`)
       const reader = r.body?.getReader()
       if (!reader) return
       
@@ -83,15 +117,38 @@ export class Ollama {
         if (done) break
         
         buf += dec.decode(value, { stream: true })
-        const lines = buf.split('\n')
         
-        for (let i = 0; i < lines.length - 1; i++) {
-          try {
-            const d = JSON.parse(lines[i]!) as OllamaRes
-            if (d.message?.content) yield d.message.content
-          } catch {}
+        if (this.isSircodeServer) {
+          // Sircode Server uses SSE format: data: {JSON}
+          const lines = buf.split('\n')
+          for (let i = 0; i < lines.length - 1; i++) {
+            const line = lines[i]
+            if (line.startsWith('data: ')) {
+              try {
+                const d = JSON.parse(line.slice(6))
+                if (d.content) yield d.content
+                if (d.error) throw new Error(d.error)
+              } catch (e) {
+                if (e instanceof Error && e.message.startsWith('{')) {
+                  // Ignore JSON parse errors for incomplete messages
+                } else if (e instanceof Error) {
+                  throw e
+                }
+              }
+            }
+          }
+          buf = lines[lines.length - 1]
+        } else {
+          // Ollama uses newline-delimited JSON
+          const lines = buf.split('\n')
+          for (let i = 0; i < lines.length - 1; i++) {
+            try {
+              const d = JSON.parse(lines[i]!) as OllamaRes
+              if (d.message?.content) yield d.message.content
+            } catch {}
+          }
+          buf = lines[lines.length - 1]!
         }
-        buf = lines[lines.length - 1]!
       }
     } catch (e) {
       clearTimeout(timeout)
@@ -133,17 +190,34 @@ export class Ollama {
    */
   async pull(model: string): Promise<void> {
     try {
-      const r = await fetch(`${this.url}/api/pull`, {
+      const endpoint = this.isSircodeServer ? '/models/pull' : '/api/pull'
+      const body = this.isSircodeServer ? { model } : { name: model, stream: false }
+
+      const r = await fetch(`${this.url}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: model, stream: false }),
+        body: JSON.stringify(body),
       })
 
       if (!r.ok) {
         throw new Error(`Failed to pull model ${model}: ${r.status} ${r.statusText}`)
       }
 
-      await r.json()
+      if (this.isSircodeServer) {
+        // Sircode Server streams pull progress as SSE
+        const reader = r.body?.getReader()
+        if (!reader) return
+        const dec = new TextDecoder()
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          const text = dec.decode(value, { stream: true })
+          // Just consume the stream, don't need to process it
+        }
+      } else {
+        // Ollama returns JSON response
+        await r.json()
+      }
     } catch (e) {
       throw e instanceof Error ? e : new Error(`Failed to pull model: ${String(e)}`)
     }

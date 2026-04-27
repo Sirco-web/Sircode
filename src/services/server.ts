@@ -208,6 +208,50 @@ export class SircodeServer {
         uptime: process.uptime(),
       })
     })
+
+    /**
+     * Ensure model is available (check and pull if needed)
+     */
+    this.app.post('/models/ensure', async (req, res) => {
+      try {
+        const { model } = req.body
+
+        if (!model) {
+          res.status(400).json({ error: 'Model name required' })
+          return
+        }
+
+        if (!this.ollama) {
+          res.status(500).json({ error: 'Ollama not initialized' })
+          return
+        }
+
+        res.setHeader('Content-Type', 'text/event-stream')
+        res.setHeader('Cache-Control', 'no-cache')
+        res.setHeader('Connection', 'keep-alive')
+
+        try {
+          // Check if model exists
+          const models = await this.ollama.ls()
+          if (models.includes(model)) {
+            res.write(`data: ${JSON.stringify({ status: 'exists', model })}\n\n`)
+            res.end()
+            return
+          }
+
+          // Model not found, pull it
+          res.write(`data: ${JSON.stringify({ status: 'pulling', model })}\n\n`)
+          await this.ollama.pull(model)
+          res.write(`data: ${JSON.stringify({ status: 'complete', model })}\n\n`)
+          res.end()
+        } catch (e) {
+          res.write(`data: ${JSON.stringify({ error: e instanceof Error ? e.message : String(e) })}\n\n`)
+          res.end()
+        }
+      } catch (e) {
+        res.status(500).json({ error: e instanceof Error ? e.message : String(e) })
+      }
+    })
   }
 
   /**

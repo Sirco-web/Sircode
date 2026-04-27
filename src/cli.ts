@@ -132,14 +132,30 @@ const runChat = async (model: string | undefined, opts: { url: string; smallMode
       // OpenAI via Cloudflare Gateway mode
       const openaiModel = opts.openai || activeModel
       console.log(chalk.cyan('🔗 Using OpenAI via Cloudflare Gateway'))
+      
+      const accountId = savedSettings.cloudflareAccountId || process.env.CLOUDFLARE_ACCOUNT_ID || ''
+      const apiToken = savedSettings.cloudflareApiToken || process.env.CLOUDFLARE_API_TOKEN || ''
+      
+      if (!accountId || !apiToken) {
+        console.error(chalk.red('✗ OpenAI Gateway not configured'))
+        console.error(chalk.red(''))
+        console.error(chalk.red('Set Cloudflare credentials using:'))
+        console.error(chalk.red('  sircode settings set'))
+        console.error(chalk.red(''))
+        console.error(chalk.red('Or set environment variables:'))
+        console.error(chalk.red('  export CLOUDFLARE_ACCOUNT_ID="your-account-id"'))
+        console.error(chalk.red('  export CLOUDFLARE_API_TOKEN="your-api-token"'))
+        process.exit(1)
+      }
+      
       ai = new OpenAIGateway({
-        accountId: savedSettings.cloudflareAccountId || process.env.CLOUDFLARE_ACCOUNT_ID || '',
-        apiToken: savedSettings.cloudflareApiToken || process.env.CLOUDFLARE_API_TOKEN || '',
+        accountId,
+        apiToken,
         model: openaiModel || 'openai/gpt-5.4-nano',
       })
       if (!(await (ai as OpenAIGateway).ok())) {
-        console.error(chalk.red('✗ OpenAI Gateway not configured'))
-        console.error(chalk.red('Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN env vars'))
+        console.error(chalk.red('✗ Failed to connect to OpenAI Gateway'))
+        console.error(chalk.red('Check your Cloudflare Account ID and API Token'))
         process.exit(1)
       }
       console.log(chalk.green(`✓ Connected to OpenAI Gateway`))
@@ -175,6 +191,52 @@ const runChat = async (model: string | undefined, opts: { url: string; smallMode
 
       console.log(chalk.green('✓ Connected'))
       console.log(chalk.dim(`Server: ${serverUrl}`))
+      console.log()
+
+      // Check if model exists, pull if needed
+      console.log(chalk.dim('📦 Checking model availability...'))
+      try {
+        const checkRes = await fetch(`${serverUrl}/models/ensure`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: activeModel }),
+        })
+
+        if (checkRes.ok && checkRes.body) {
+          const reader = checkRes.body.getReader()
+          const dec = new TextDecoder()
+          let spinner = 0
+          const spinners = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+
+            const text = dec.decode(value, { stream: true })
+            const lines = text.split('\n').filter(l => l.length > 0)
+
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                try {
+                  const data = JSON.parse(line.slice(6))
+                  if (data.status === 'exists') {
+                    console.log(chalk.green(`✓ Model ${activeModel} ready`))
+                  } else if (data.status === 'pulling') {
+                    console.log(chalk.yellow(`📥 Downloading model ${activeModel}...`))
+                  } else if (data.status === 'complete') {
+                    console.log(chalk.green(`✓ Model ${activeModel} downloaded`))
+                  } else if (data.error) {
+                    console.error(chalk.yellow(`⚠️  ${data.error}`))
+                  }
+                } catch {}
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.warn(chalk.dim(`⚠️  Could not check model: ${e instanceof Error ? e.message : String(e)}`))
+      }
+
       console.log()
 
       const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
