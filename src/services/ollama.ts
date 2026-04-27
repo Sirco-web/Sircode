@@ -282,8 +282,12 @@ export class Ollama {
           for (let i = 0; i < lines.length - 1; i++) {
             const line = lines[i]
             if (line.startsWith('data: ')) {
+              const payload = line.slice(6).trim()
+              if (!payload || payload === '[DONE]') {
+                continue
+              }
               try {
-                const d = JSON.parse(line.slice(6))
+                const d = JSON.parse(payload)
                 if (d.content) yield d.content
                 if (d.error) throw new Error(d.error)
               } catch (e) {
