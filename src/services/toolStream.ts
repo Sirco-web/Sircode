@@ -15,7 +15,6 @@ export class ToolStreamExecutor {
   private buffer = ''
   private inBracket = false
   private bracketStart = 0
-  private executableTools: ToolCall[] = []
   private sessionCoord: any
   private fmt: any
 
@@ -38,37 +37,23 @@ export class ToolStreamExecutor {
         this.inBracket = true
         this.bracketStart = i
       } else if (this.buffer[i] === ']' && this.inBracket) {
-        // Found closing bracket - extract and parse tool
         const toolText = this.buffer.substring(this.bracketStart + 1, i)
         const tool = this.parseTool(toolText)
-        
+
         if (tool) {
-          const fullTool: ToolCall = {
-            ...tool,
-            fullText: this.buffer.substring(this.bracketStart, i + 1)
-          }
-          newTools.push(fullTool)
-          this.executableTools.push(fullTool)
+          const fullText = this.buffer.substring(this.bracketStart, i + 1)
+          newTools.push({ ...tool, fullText })
         }
-        
+
         this.inBracket = false
+        // Remove the bracket segment from the buffer so the next `]` in this chunk is parsed.
+        // (The old indexOf(lastTool.fullText) approach failed for multi-line wf, so tools
+        // only "appeared" at stream end via flush() + parse().)
+        const end = i + 1
+        this.buffer = this.buffer.slice(0, this.bracketStart) + this.buffer.slice(end)
+        i = Math.max(0, this.bracketStart - 1)
       }
       i++
-    }
-
-    // Remove processed tools from buffer (keep only unprocessed part)
-    if (this.executableTools.length > 0) {
-      const lastTool = this.executableTools[this.executableTools.length - 1]
-      const toolEnd = this.buffer.indexOf(lastTool.fullText)
-      if (toolEnd >= 0) {
-        const endIdx = toolEnd + lastTool.fullText.length
-        if (endIdx <= this.buffer.length) {
-          this.buffer = this.buffer.substring(endIdx)
-          
-          // Reset last tool tracker
-          const toolToRemove = this.executableTools.shift()
-        }
-      }
     }
 
     return newTools

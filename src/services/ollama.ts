@@ -24,6 +24,23 @@ export class Ollama {
     return this.isSircodeServer ? ['/models/pull', '/api/pull'] : ['/api/pull', '/models/pull']
   }
 
+  /**
+   * Ollama/llama.cpp generation options. Default: no output token cap, large context.
+   * `num_predict: -1` = unlimited in Ollama; `num_ctx` is capped by the model.
+   */
+  private buildOllamaGenOptions(opts?: Opts): Record<string, unknown> {
+    const o: Record<string, unknown> = {
+      num_predict: -1,
+      num_ctx: opts?.num_ctx ?? 131072,
+    }
+    if (opts?.predict !== undefined) o.num_predict = opts.predict
+    if (opts?.temp !== undefined) o.temperature = opts.temp
+    if (opts?.top_k !== undefined) o.top_k = opts.top_k
+    if (opts?.top_p !== undefined) o.top_p = opts.top_p
+    if (opts?.stop && opts.stop.length > 0) o.stop = opts.stop
+    return o
+  }
+
   private buildPrompt(msgs: Msg[]): string {
     // Basic chat-to-prompt adapter for older Ollama versions that lack /api/chat.
     // Keeps formatting simple and deterministic.
@@ -49,6 +66,7 @@ export class Ollama {
       model: this.model,
       messages: msgs,
       stream,
+      max_tokens: 999999,
     }
     return await this.tryPostJson('/v1/chat/completions', body, signal)
   }
@@ -149,12 +167,13 @@ export class Ollama {
     
     try {
       const attempts: Array<{ endpoint: string; status?: number; url?: string }> = []
-      const body = {
+      const body: Record<string, unknown> = {
         model: this.model,
         messages: msgs,
         stream: false,
-        ...(this.isSircodeServer ? {} : { keep_alive: '10m' }),
+        options: this.buildOllamaGenOptions(opts),
       }
+      if (!this.isSircodeServer) body.keep_alive = '10m'
 
       const [primary, fallback] = this.chatEndpoints()
       let r = await this.tryPostJson(primary, body, ctrl.signal)
@@ -172,7 +191,7 @@ export class Ollama {
           prompt: this.buildPrompt(msgs),
           stream: false,
           keep_alive: '10m',
-          options: opts,
+          options: this.buildOllamaGenOptions(opts),
         }
         r = await this.tryPostJson('/api/generate', gen, ctrl.signal)
         attempts.push({ endpoint: '/api/generate', status: r.status, url: r.url })
@@ -218,12 +237,13 @@ export class Ollama {
     
     try {
       const attempts: Array<{ endpoint: string; status?: number; url?: string }> = []
-      const body = {
+      const body: Record<string, unknown> = {
         model: this.model,
         messages: msgs,
         stream: true,
-        ...(this.isSircodeServer ? {} : { keep_alive: '10m' }),
+        options: this.buildOllamaGenOptions(opts),
       }
+      if (!this.isSircodeServer) body.keep_alive = '10m'
 
       const [primary, fallback] = this.chatEndpoints()
       let r = await this.tryPostJson(primary, body, ctrl.signal)
@@ -243,7 +263,7 @@ export class Ollama {
           prompt: this.buildPrompt(msgs),
           stream: true,
           keep_alive: '10m',
-          options: opts,
+          options: this.buildOllamaGenOptions(opts),
         }
         r = await this.tryPostJson('/api/generate', gen, ctrl.signal)
         attempts.push({ endpoint: '/api/generate', status: r.status, url: r.url })

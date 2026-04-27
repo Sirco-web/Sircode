@@ -13,6 +13,7 @@ import { ContextService } from './services/context.js'
 import { SessionCoordinator } from './coordinator/session.js'
 import { run as runTool } from './tools/index.js'
 import { fmt, parse } from './utils/index.js'
+import type { Msg } from './types/index.js'
 import { ensureOllama } from './services/startup.js'
 import { ToolStreamExecutor } from './services/toolStream.js'
 import { FrustrationDetector } from './services/frustration.js'
@@ -283,6 +284,24 @@ const runChat = async (model: string | undefined, opts: { url: string; smallMode
         console.log(chalk.dim(`\nSession saved to .code/`))
       })
 
+      const SERVER_TOOL_SYSTEM = `You are Sircode - an autonomous coding assistant.
+
+CRITICAL: Tool Format Requirement ⚠️
+Tools MUST use BRACKET FORMAT: [tool: args]
+NOT markdown code blocks - those are IGNORED!
+
+✅ CORRECT: [wf: file.html, <!DOCTYPE html>...]
+❌ WRONG:  \`\`\`bash\\nwf: file.html, content\\n\`\`\`
+
+Bracket Format = Files Created ✓
+Markdown Code Blocks = Ignored ✗
+
+Available tools: wf (write), fe (edit), fr (read), bash (execute), ws (search), wf2 (fetch)
+Always use [tool: args] bracket format - never use markdown code blocks!`
+
+      /** Ollama: no cap on new tokens, large context (passed through to server → Ollama) */
+      const serverGenOpts = { predict: -1, num_ctx: 131072 }
+
       const ask = (): void => {
         rl.question(chalk.blue('You: '), async (inp: string) => {
           if (inp.toLowerCase() === 'exit') {
@@ -304,31 +323,67 @@ const runChat = async (model: string | undefined, opts: { url: string; smallMode
           console.log(chalk.dim('streaming...\n'))
 
           try {
+            const executor = new ToolStreamExecutor(coord, fmt)
             let res = ''
-            for await (const chunk of o.streamChat([
-              { 
-                role: 'system', 
-                content: `You are Sircode - an autonomous coding assistant.
-
-CRITICAL: Tool Format Requirement ⚠️
-Tools MUST use BRACKET FORMAT: [tool: args]
-NOT markdown code blocks - those are IGNORED!
-
-✅ CORRECT: [wf: file.html, <!DOCTYPE html>...]
-❌ WRONG:  \`\`\`bash\\nwf: file.html, content\\n\`\`\`
-
-Bracket Format = Files Created ✓
-Markdown Code Blocks = Ignored ✗
-
-Available tools: wf (write), fe (edit), fr (read), bash (execute), ws (search), wf2 (fetch)
-Always use [tool: args] bracket format - never use markdown code blocks!`
-              },
+            const baseMsgs: Msg[] = [
+              { role: 'system', content: SERVER_TOOL_SYSTEM },
               { role: 'user', content: inp },
-            ])) {
+            ]
+
+            for await (const chunk of o.streamChat(baseMsgs, serverGenOpts)) {
               process.stdout.write(chalk.green(chunk))
               res += chunk
+
+              const toolsFound = executor.processChunk(chunk)
+              for (const toolCall of toolsFound) {
+                if (toolCall.tool === 'ask') {
+                  const q = toolCall.args.join(' ')
+                  console.log(chalk.yellow(`\n❓ AI Question: ${q}`))
+                  const answer = await new Promise<string>(resolve => {
+                    rl.question(chalk.blue('You: '), (ans) => resolve(ans))
+                  })
+                  console.log(chalk.dim('\n✓ Continuing with your answer...\n'))
+                  try {
+                    let res2 = ''
+                    const continuation: Msg[] = [
+                      { role: 'system', content: SERVER_TOOL_SYSTEM },
+                      { role: 'user', content: inp },
+                      { role: 'assistant', content: res },
+                      { role: 'user', content: answer },
+                    ]
+                    for await (const chunk2 of o.streamChat(continuation, serverGenOpts)) {
+                      process.stdout.write(chalk.green(chunk2))
+                      res2 += chunk2
+                      const toolsFound2 = executor.processChunk(chunk2)
+                      for (const tc2 of toolsFound2) {
+                        if (tc2.tool !== 'ask') {
+                          await executor.executeTool(tc2)
+                        }
+                      }
+                    }
+                    console.log('\n')
+                    res += res2
+                  } catch (e) {
+                    console.error(chalk.red(`\n✗ ${e instanceof Error ? e.message : String(e)}`))
+                    coord.session.errors++
+                  }
+                } else {
+                  await executor.executeTool(toolCall)
+                }
+              }
             }
             console.log('\n')
+
+            const remaining = executor.flush()
+            if (remaining.trim()) {
+              for (const { tool, args } of parse(remaining)) {
+                const result = await Promise.resolve(runTool(tool, ...args))
+                console.log(fmt.res(tool, result))
+                coord.recordTool(tool, result)
+                if (tool === 'wf' || tool === 'fe') coord.recordFileOp('create', args[0])
+                if (tool === 'rep' || tool === 'add') coord.recordFileOp('modify', args[0])
+              }
+            }
 
             if (res) {
               coord.session.messages++

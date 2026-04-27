@@ -11,6 +11,7 @@ import chalk from 'chalk'
 import { Ollama } from './ollama.js'
 import { GPUDetector } from './gpuDetector.js'
 import { OllamaSetup } from './ollamaSetup.js'
+import type { Opts } from '../types/index.js'
 
 export interface ServerConfig {
   port: number
@@ -23,6 +24,8 @@ export interface ChatRequest {
   model: string
   messages: Array<{ role: string; content: string }>
   stream?: boolean
+  /** Passthrough to Ollama `options` (num_predict, num_ctx, …) */
+  options?: Opts
 }
 
 export interface ChatResponse {
@@ -229,7 +232,7 @@ export class SircodeServer {
      */
     this.app.post('/chat', async (req, res) => {
       try {
-        const { model, messages, stream } = req.body as ChatRequest
+        const { model, messages, stream, options } = req.body as ChatRequest
 
         if (!model) {
           res.status(400).json({ error: 'Model required' })
@@ -261,7 +264,10 @@ export class SircodeServer {
           res.setHeader('Connection', 'keep-alive')
 
           try {
-            for await (const chunk of this.ollama.streamChat(msgsWithSystem.map((m) => ({ ...m, role: m.role as 'user' | 'assistant' | 'system' })))) {
+            for await (const chunk of this.ollama.streamChat(
+              msgsWithSystem.map((m) => ({ ...m, role: m.role as 'user' | 'assistant' | 'system' })),
+              options,
+            )) {
               res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`)
             }
             res.write(`data: [DONE]\n\n`)
@@ -273,7 +279,8 @@ export class SircodeServer {
         } else {
           // Single response
           const response = await this.ollama.chat(
-            msgsWithSystem.map((m) => ({ ...m, role: m.role as 'user' | 'assistant' | 'system' }))
+            msgsWithSystem.map((m) => ({ ...m, role: m.role as 'user' | 'assistant' | 'system' })),
+            options,
           )
           res.json({
             content: response,
