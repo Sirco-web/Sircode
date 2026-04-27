@@ -41,6 +41,49 @@ export class SircodeServer {
   private ollama: Ollama | null = null
   private isRunning = false
 
+  private getOllamaBaseUrl(): string {
+    return this.config.ollamaUrl.replace(/\/$/, '')
+  }
+
+  private async proxyToOllama(req: express.Request, res: express.Response, path: string): Promise<void> {
+    const base = this.getOllamaBaseUrl()
+    const url = `${base}${path}`
+
+    try {
+      const r = await fetch(url, {
+        method: req.method,
+        headers: {
+          // forward only what we need; let node set Host automatically
+          ...(req.header('content-type') ? { 'content-type': req.header('content-type')! } : {}),
+          ...(req.header('accept') ? { accept: req.header('accept')! } : {}),
+        },
+        body: req.method === 'GET' || req.method === 'HEAD' ? undefined : JSON.stringify(req.body ?? {}),
+      })
+
+      res.status(r.status)
+
+      const ct = r.headers.get('content-type')
+      if (ct) res.setHeader('Content-Type', ct)
+
+      // Stream if possible
+      if (r.body) {
+        const reader = r.body.getReader()
+        const dec = new TextDecoder()
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          res.write(dec.decode(value, { stream: true }))
+        }
+        res.end()
+        return
+      }
+
+      res.end()
+    } catch (e) {
+      res.status(502).json({ error: e instanceof Error ? e.message : String(e) })
+    }
+  }
+
   constructor(config: Partial<ServerConfig> = {}) {
     this.config = {
       port: 8093,
@@ -135,6 +178,32 @@ export class SircodeServer {
       } catch (e) {
         res.status(500).json({ error: e instanceof Error ? e.message : String(e) })
       }
+    })
+
+    /**
+     * Compatibility proxy routes (thin proxy to local Ollama).
+     * This makes the Sircode server usable as a drop-in network front for clients
+     * expecting native Ollama/OpenAI-style endpoints.
+     */
+    this.app.post('/api/chat', async (req, res) => {
+      await this.proxyToOllama(req, res, '/api/chat')
+    })
+    this.app.post('/api/generate', async (req, res) => {
+      await this.proxyToOllama(req, res, '/api/generate')
+    })
+    this.app.get('/api/tags', async (req, res) => {
+      await this.proxyToOllama(req, res, '/api/tags')
+    })
+    this.app.post('/api/pull', async (req, res) => {
+      await this.proxyToOllama(req, res, '/api/pull')
+    })
+
+    // OpenAI-compatible Ollama routes
+    this.app.get('/v1/models', async (req, res) => {
+      await this.proxyToOllama(req, res, '/v1/models')
+    })
+    this.app.post('/v1/chat/completions', async (req, res) => {
+      await this.proxyToOllama(req, res, '/v1/chat/completions')
     })
 
     /**

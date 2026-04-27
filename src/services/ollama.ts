@@ -38,6 +38,21 @@ export class Ollama {
     return parts.join('\n\n')
   }
 
+  private async tryOpenAIChat(
+    msgs: Msg[],
+    stream: boolean,
+    signal?: AbortSignal,
+  ): Promise<Response> {
+    // Ollama also supports an OpenAI-compatible API under /v1/...
+    // https://github.com/ollama/ollama/blob/main/docs/openai.md (path may vary by version)
+    const body = {
+      model: this.model,
+      messages: msgs,
+      stream,
+    }
+    return await this.tryPostJson('/v1/chat/completions', body, signal)
+  }
+
   private async tryPostJson(
     endpoint: string,
     body: unknown,
@@ -84,7 +99,7 @@ export class Ollama {
   async ls(): Promise<string[]> {
     try {
       // Prefer whichever API matches the server, but fall back gracefully.
-      const endpoints = this.isSircodeServer ? ['/models', '/api/tags'] : ['/api/tags', '/models']
+      const endpoints = this.isSircodeServer ? ['/models', '/api/tags'] : ['/api/tags', '/v1/models']
 
       // Sircode Server /models endpoint
       if (endpoints[0] === '/models') {
@@ -97,28 +112,29 @@ export class Ollama {
       }
 
       // Ollama /api/tags endpoint
-      const r = await fetch(`${this.url}/api/tags`)
-      if (r.ok) {
-        this.isSircodeServer = false
-        const d = (await r.json()) as { models?: Array<{ name: string }> }
-        return (d.models ?? []).map(m => m.name)
-      }
-
-      // Last attempt: the endpoint we didn't try first (in case first failed non-404)
       if (endpoints[0] === '/api/tags') {
-        const r2 = await fetch(`${this.url}/models`)
-        if (r2.ok) {
-          this.isSircodeServer = true
-          const d = (await r2.json()) as { models?: string[] }
-          return d.models ?? []
-        }
-      } else {
-        const r2 = await fetch(`${this.url}/api/tags`)
-        if (r2.ok) {
+        const r = await fetch(`${this.url}/api/tags`)
+        if (r.ok) {
           this.isSircodeServer = false
-          const d = (await r2.json()) as { models?: Array<{ name: string }> }
+          const d = (await r.json()) as { models?: Array<{ name: string }> }
           return (d.models ?? []).map(m => m.name)
         }
+      }
+
+      // OpenAI-compatible /v1/models (some installs expose only this)
+      const v1 = await fetch(`${this.url}/v1/models`)
+      if (v1.ok) {
+        this.isSircodeServer = false
+        const d = (await v1.json()) as { data?: Array<{ id: string }> }
+        return (d.data ?? []).map(m => m.id)
+      }
+
+      // Last attempt: Sircode server models (if the initial heuristic was wrong)
+      const r2 = await fetch(`${this.url}/models`)
+      if (r2.ok) {
+        this.isSircodeServer = true
+        const d = (await r2.json()) as { models?: string[] }
+        return d.models ?? []
       }
 
       return []
@@ -157,6 +173,11 @@ export class Ollama {
         }
         r = await this.tryPostJson('/api/generate', gen, ctrl.signal)
       }
+
+      // Some installs expose only OpenAI-compatible endpoints.
+      if (!this.isSircodeServer && r.status === 404) {
+        r = await this.tryOpenAIChat(msgs, false, ctrl.signal)
+      }
       clearTimeout(timeout)
       
       if (!r.ok) {
@@ -167,7 +188,13 @@ export class Ollama {
       const data = await r.json()
       
       // Handle both response formats
-      const content = this.isSircodeServer ? data.content : (data.message?.content ?? data.response)
+      const content =
+        this.isSircodeServer
+          ? data.content
+          : (data.message?.content ??
+            data.response ??
+            data.choices?.[0]?.message?.content ??
+            data.choices?.[0]?.text)
       if (!content) throw new Error('No response from model')
       return content
     } catch (e) {
@@ -200,6 +227,7 @@ export class Ollama {
 
       // Older Ollama: if /api/chat doesn't exist, stream from /api/generate instead.
       let isGenerateStream = false
+      let isOpenAIStream = false
       if (!this.isSircodeServer && r.status === 404) {
         const gen = {
           model: this.model,
@@ -210,6 +238,12 @@ export class Ollama {
         }
         r = await this.tryPostJson('/api/generate', gen, ctrl.signal)
         isGenerateStream = true
+      }
+
+      // Some installs expose only OpenAI-compatible streaming.
+      if (!this.isSircodeServer && r.status === 404) {
+        r = await this.tryOpenAIChat(msgs, true, ctrl.signal)
+        isOpenAIStream = true
       }
       clearTimeout(timeout)
       
@@ -251,7 +285,29 @@ export class Ollama {
           }
           buf = lines[lines.length - 1]
         } else {
-          // Ollama uses newline-delimited JSON (both /api/chat and /api/generate)
+          // Ollama uses newline-delimited JSON (/api/chat, /api/generate)
+          // OpenAI-compatible streaming uses SSE "data: {...}".
+          if (isOpenAIStream) {
+            const lines = buf.split('\n')
+            for (let i = 0; i < lines.length - 1; i++) {
+              const line = lines[i] ?? ''
+              const trimmed = line.trim()
+              if (!trimmed.startsWith('data:')) continue
+              const payload = trimmed.slice('data:'.length).trim()
+              if (!payload || payload === '[DONE]') continue
+              try {
+                const d = JSON.parse(payload) as {
+                  choices?: Array<{ delta?: { content?: string } }>
+                }
+                const content = d.choices?.[0]?.delta?.content
+                if (content) yield content
+              } catch {}
+            }
+            buf = lines[lines.length - 1]!
+            continue
+          }
+
+          // Newline-delimited JSON
           const lines = buf.split('\n')
           for (let i = 0; i < lines.length - 1; i++) {
             try {
