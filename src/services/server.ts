@@ -84,6 +84,41 @@ export class SircodeServer {
     }
   }
 
+  private async probeBackend(): Promise<void> {
+    const base = this.getOllamaBaseUrl()
+    const probes: Array<{ label: string; method: 'GET' | 'POST'; path: string; body?: unknown }> = [
+      { label: 'ollama tags', method: 'GET', path: '/api/tags' },
+      { label: 'openai models', method: 'GET', path: '/v1/models' },
+      { label: 'ollama chat', method: 'POST', path: '/api/chat', body: { model: 'probe', messages: [], stream: false } },
+      { label: 'ollama generate', method: 'POST', path: '/api/generate', body: { model: 'probe', prompt: 'hi', stream: false } },
+      { label: 'openai chat', method: 'POST', path: '/v1/chat/completions', body: { model: 'probe', messages: [], stream: false } },
+    ]
+
+    const results: string[] = []
+    for (const p of probes) {
+      try {
+        const r = await fetch(`${base}${p.path}`, {
+          method: p.method,
+          headers: p.method === 'POST' ? { 'Content-Type': 'application/json' } : undefined,
+          body: p.method === 'POST' ? JSON.stringify(p.body ?? {}) : undefined,
+        })
+        results.push(`${p.label}: ${r.status}`)
+      } catch (e) {
+        results.push(`${p.label}: error`)
+      }
+    }
+
+    console.log(`🔎 Backend: ${base}`)
+    console.log(`🔎 Probes: ${results.join(' | ')}`)
+    const all404 = results.every(r => r.includes(': 404'))
+    if (all404) {
+      console.log(
+        `⚠️  Backend at ${base} does not look like Ollama (all probed routes 404). ` +
+          `If your backend is elsewhere, start server with --ollama-url <url>.`,
+      )
+    }
+  }
+
   constructor(config: Partial<ServerConfig> = {}) {
     this.config = {
       port: 8093,
@@ -115,6 +150,18 @@ export class SircodeServer {
    * Setup API routes
    */
   private setupRoutes(): void {
+    const TOOL_SYSTEM_PROMPT =
+      `You are Sircode - an autonomous coding assistant.\n\n` +
+      `CRITICAL: Tool Format Requirement ⚠️\n` +
+      `Tools MUST use BRACKET FORMAT: [tool: args]\n` +
+      `NOT markdown code blocks - those are IGNORED!\n\n` +
+      `✅ CORRECT: [wf: file.html, <!DOCTYPE html>...]\n` +
+      `❌ WRONG:  \`\`\`bash\\nwf: file.html, content\\n\`\`\`\n\n` +
+      `Bracket Format = Files Created ✓\n` +
+      `Markdown Code Blocks = Ignored ✗\n\n` +
+      `Available tools: wf (write), fe (edit), fr (read), bash (execute), ws (search), wf2 (fetch)\n` +
+      `Always use [tool: args] bracket format - never use markdown code blocks!`
+
     /**
      * Health check
      */
@@ -147,7 +194,11 @@ export class SircodeServer {
         await this.ensureModel(model)
 
         // Cast messages to proper type
-        const msgs = messages as Array<{ role: string; content: string }>
+        const msgs = (messages as Array<{ role: string; content: string }>) ?? []
+
+        // Ensure a tool-usage system prompt is present (best-effort).
+        const hasSystem = msgs.some(m => m?.role === 'system' && typeof m.content === 'string' && m.content.length > 0)
+        const msgsWithSystem = hasSystem ? msgs : [{ role: 'system', content: TOOL_SYSTEM_PROMPT }, ...msgs]
 
         if (stream) {
           // Streaming response
@@ -156,7 +207,7 @@ export class SircodeServer {
           res.setHeader('Connection', 'keep-alive')
 
           try {
-            for await (const chunk of this.ollama.streamChat(msgs.map((m) => ({ ...m, role: m.role as 'user' | 'assistant' | 'system' })))) {
+            for await (const chunk of this.ollama.streamChat(msgsWithSystem.map((m) => ({ ...m, role: m.role as 'user' | 'assistant' | 'system' })))) {
               res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`)
             }
             res.write(`data: [DONE]\n\n`)
@@ -168,7 +219,7 @@ export class SircodeServer {
         } else {
           // Single response
           const response = await this.ollama.chat(
-            msgs.map((m) => ({ ...m, role: m.role as 'user' | 'assistant' | 'system' }))
+            msgsWithSystem.map((m) => ({ ...m, role: m.role as 'user' | 'assistant' | 'system' }))
           )
           res.json({
             content: response,
@@ -378,6 +429,9 @@ export class SircodeServer {
       if (!(await this.testOllama())) {
         throw new Error('Cannot connect to Ollama. Make sure Ollama is running.')
       }
+
+      // Print backend probe summary for debugging route mismatches
+      await this.probeBackend()
 
       // Start Express server
       this.server = this.app.listen(this.config.port, this.config.host, () => {

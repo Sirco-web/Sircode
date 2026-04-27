@@ -148,6 +148,7 @@ export class Ollama {
     const timeout = setTimeout(() => ctrl.abort(), 600000) // 10 min timeout for CPU models
     
     try {
+      const attempts: Array<{ endpoint: string; status?: number; url?: string }> = []
       const body = {
         model: this.model,
         messages: msgs,
@@ -157,8 +158,10 @@ export class Ollama {
 
       const [primary, fallback] = this.chatEndpoints()
       let r = await this.tryPostJson(primary, body, ctrl.signal)
+      attempts.push({ endpoint: primary, status: r.status, url: r.url })
       if (r.status === 404 || r.status === 405) {
         r = await this.tryPostJson(fallback, body, ctrl.signal)
+        attempts.push({ endpoint: fallback, status: r.status, url: r.url })
         if (r.ok) this.isSircodeServer = fallback === '/chat'
       }
 
@@ -172,17 +175,20 @@ export class Ollama {
           options: opts,
         }
         r = await this.tryPostJson('/api/generate', gen, ctrl.signal)
+        attempts.push({ endpoint: '/api/generate', status: r.status, url: r.url })
       }
 
       // Some installs expose only OpenAI-compatible endpoints.
       if (!this.isSircodeServer && r.status === 404) {
         r = await this.tryOpenAIChat(msgs, false, ctrl.signal)
+        attempts.push({ endpoint: '/v1/chat/completions', status: r.status, url: r.url })
       }
       clearTimeout(timeout)
       
       if (!r.ok) {
         throw new Error(
-          `${this.isSircodeServer ? 'Sircode Server' : 'Ollama'}: ${r.status} (${r.url})`,
+          `${this.isSircodeServer ? 'Sircode Server' : 'Ollama'}: ${r.status} (${r.url}) ` +
+            `[attempts: ${attempts.map(a => `${a.endpoint}=>${a.status}`).join(', ')}]`,
         )
       }
       const data = await r.json()
@@ -211,6 +217,7 @@ export class Ollama {
     const timeout = setTimeout(() => ctrl.abort(), 600000) // 10 min timeout
     
     try {
+      const attempts: Array<{ endpoint: string; status?: number; url?: string }> = []
       const body = {
         model: this.model,
         messages: msgs,
@@ -220,8 +227,10 @@ export class Ollama {
 
       const [primary, fallback] = this.chatEndpoints()
       let r = await this.tryPostJson(primary, body, ctrl.signal)
+      attempts.push({ endpoint: primary, status: r.status, url: r.url })
       if (r.status === 404 || r.status === 405) {
         r = await this.tryPostJson(fallback, body, ctrl.signal)
+        attempts.push({ endpoint: fallback, status: r.status, url: r.url })
         if (r.ok) this.isSircodeServer = fallback === '/chat'
       }
 
@@ -237,19 +246,22 @@ export class Ollama {
           options: opts,
         }
         r = await this.tryPostJson('/api/generate', gen, ctrl.signal)
+        attempts.push({ endpoint: '/api/generate', status: r.status, url: r.url })
         isGenerateStream = true
       }
 
       // Some installs expose only OpenAI-compatible streaming.
       if (!this.isSircodeServer && r.status === 404) {
         r = await this.tryOpenAIChat(msgs, true, ctrl.signal)
+        attempts.push({ endpoint: '/v1/chat/completions', status: r.status, url: r.url })
         isOpenAIStream = true
       }
       clearTimeout(timeout)
       
       if (!r.ok) {
         throw new Error(
-          `${this.isSircodeServer ? 'Sircode Server' : 'Ollama'}: ${r.status} (${r.url})`,
+          `${this.isSircodeServer ? 'Sircode Server' : 'Ollama'}: ${r.status} (${r.url}) ` +
+            `[attempts: ${attempts.map(a => `${a.endpoint}=>${a.status}`).join(', ')}]`,
         )
       }
       const reader = r.body?.getReader()

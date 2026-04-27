@@ -1108,9 +1108,10 @@ Or ask the agent to do anything! Example:
 p.command('server')
   .option('-p, --port <port>', 'Server port', '8093')
   .option('-h, --host <host>', 'Server host', '0.0.0.0')
+  .option('--ollama-url <url>', 'Local model backend URL (default: http://localhost:11434)', 'http://localhost:11434')
   .option('-v, --verbose', 'Verbose output')
   .description('Start Sircode server for distributed inference')
-  .action(async (opts: { port: string; host: string; verbose: boolean }) => {
+  .action(async (opts: { port: string; host: string; verbose: boolean; ollamaUrl: string }) => {
     const port = parseInt(opts.port, 10)
 
     console.log(fmt.hdr('Sircode Server'))
@@ -1128,6 +1129,7 @@ p.command('server')
         port,
         host: opts.host,
         verbose: opts.verbose,
+        ollamaUrl: opts.ollamaUrl,
       })
 
       await server.start()
