@@ -181,8 +181,9 @@ const runChat = async (model: string | undefined, opts: { url: string; smallMode
       console.log(chalk.cyan(`🌐 Connecting to server: ${serverUrl}`))
 
       // Use remote Ollama via server
+      const cwd = process.cwd()
       const o = new Ollama(activeModel, `${serverUrl}`)
-      const coord = new SessionCoordinator(process.cwd(), activeModel)
+      const coord = new SessionCoordinator(cwd, activeModel)
       const frustration = new FrustrationDetector()
 
       // Test connection
@@ -285,7 +286,13 @@ const runChat = async (model: string | undefined, opts: { url: string; smallMode
         console.log(chalk.dim(`\nSession saved to .code/`))
       })
 
-      const SERVER_TOOL_SYSTEM = SystemPromptFactory.generateChatSystemPrompt()
+      // Load base system prompt and inject project context
+      const baseSystemPrompt = SystemPromptFactory.generateChatSystemPrompt()
+      const projectContext = ContextService.loadProjectContextForPrompt(cwd)
+      const SERVER_TOOL_SYSTEM = baseSystemPrompt.replace(
+        '## PROJECT CONTEXT FROM .code/',
+        projectContext.trim().split('\n').slice(1).join('\n')
+      ) || baseSystemPrompt
 
       /** Ollama: no cap on new tokens, large context (passed through to server → Ollama) */
       const serverGenOpts = { predict: -1, num_ctx: 131072 }
@@ -390,9 +397,10 @@ const runChat = async (model: string | undefined, opts: { url: string; smallMode
     } else {
     // Initialize Ollama for local mode
       const o = new Ollama(activeModel, activeProvider === 'ollama' ? savedSettings.url || opts.url : opts.url)
-      const c = new ContextService(activeModel)
+      const cwd = process.cwd()
+      const c = new ContextService(activeModel, cwd)
       c.setSys(SystemPromptFactory.generateChatSystemPrompt())
-      const coord = new SessionCoordinator(process.cwd(), activeModel)
+      const coord = new SessionCoordinator(cwd, activeModel)
     const frustration = new FrustrationDetector()
     const undercover = new UncoverMode()
     const memory = new MemorySystem()
@@ -1045,9 +1053,10 @@ p.command('agent [model]')
     const m = model || 'mistral'
     console.log(fmt.hdr(`🤖 Sircode Agent: ${m}`))
 
+    const cwd = process.cwd()
     const o = new Ollama(m, opts.url)
-    const c = new ContextService(m)
-    const coord = new SessionCoordinator(process.cwd(), m)
+    const c = new ContextService(m, cwd)
+    const coord = new SessionCoordinator(cwd, m)
     const agent = new Agent(o, c, coord)
 
     console.log(chalk.dim('Checking Ollama...'))
